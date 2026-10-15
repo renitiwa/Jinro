@@ -1,0 +1,2883 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>薄暗い森のたかねこ人狼 - 3D Multiplayer Werewolf</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js r128 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- PeerJS for P2P Networking -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Shippori+Mincho:wght@600;800&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --font-main: 'Noto Sans JP', sans-serif;
+            --font-serif: 'Shippori Mincho', serif;
+        }
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #05070b;
+            font-family: var(--font-main);
+            color: #e2e8f0;
+        }
+        .font-mincho {
+            font-family: var(--font-serif);
+        }
+        #canvas-container {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        /* Vignette & eerie forest overlay */
+        .forest-vignette {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 2;
+            background: radial-gradient(circle at center, transparent 45%, rgba(2, 4, 8, 0.78) 100%);
+        }
+        /* Glassmorphism dark UI */
+        .glass-panel {
+            background: rgba(11, 15, 25, 0.82);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+        }
+        .glass-panel-gold {
+            background: rgba(15, 19, 32, 0.88);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(217, 119, 6, 0.35);
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.75), inset 0 0 15px rgba(217, 119, 6, 0.08);
+        }
+        /* 3D Floating Nameplates */
+        .nameplate {
+            position: absolute;
+            transform: translate(-50%, -100%);
+            pointer-events: none;
+            white-space: nowrap;
+            transition: opacity 0.15s ease;
+            z-index: 5;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.4);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(100, 116, 139, 0.5);
+            border-radius: 9999px;
+        }
+        /* Virtual Joystick */
+        #joystick-zone {
+            touch-action: none;
+        }
+        #look-zone {
+            touch-action: none;
+        }
+        @keyframes pulseGlow {
+            0%, 100% { filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.6)); }
+            50% { filter: drop-shadow(0 0 18px rgba(239, 68, 68, 0.95)); }
+        }
+        .takaneko-glow {
+            animation: pulseGlow 2.5s infinite ease-in-out;
+        }
+        @keyframes floatSlow {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-6px); }
+        }
+        .animate-float {
+            animation: floatSlow 3.5s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="relative w-full h-full overflow-hidden select-none">
+
+    <!-- 3D Canvas Container -->
+    <div id="canvas-container"></div>
+    <div class="forest-vignette" id="vignette-overlay"></div>
+
+    <!-- 3D Floating Nameplates Container -->
+    <div id="nameplates-container" class="absolute inset-0 pointer-events-none overflow-hidden z-10"></div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none w-11/12 max-w-md"></div>
+
+    <!-- Dramatic Phase / Moderator Announcement Banner -->
+    <div id="dramatic-banner" class="fixed inset-x-0 top-1/4 z-40 flex flex-col items-center justify-center pointer-events-none opacity-0 transition-opacity duration-500">
+        <div class="glass-panel-gold px-8 py-5 rounded-2xl text-center max-w-xl mx-4 transform scale-95 transition-transform duration-500" id="dramatic-banner-box">
+            <div id="dramatic-subtitle" class="text-amber-400 text-xs font-bold tracking-widest uppercase mb-1">ANNOUNCEMENT</div>
+            <h2 id="dramatic-title" class="font-mincho text-2xl sm:text-4xl font-extrabold text-white tracking-wider drop-shadow-lg">夜が訪れました</h2>
+            <p id="dramatic-desc" class="text-slate-300 text-sm sm:text-base mt-2"></p>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- START / LOBBY CONNECTION MODAL             -->
+    <!-- ========================================== -->
+    <div id="setup-modal" class="fixed inset-0 z-40 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-md overflow-y-auto">
+        <div class="glass-panel-gold w-full max-w-2xl rounded-3xl p-5 sm:p-8 my-auto border border-amber-500/30 shadow-2xl">
+            <!-- Title Header -->
+            <div class="text-center mb-6">
+                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-950/80 border border-red-500/40 text-red-300 text-xs font-semibold mb-2">
+                    <i class="fa-solid fa-paw"></i> 3D P2Pマルチプレイ人狼ゲーム
+                </div>
+                <h1 class="font-mincho text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-rose-200 to-amber-400 tracking-wide">
+                    薄暗い森のたかねこ人狼
+                </h1>
+                <p class="text-xs sm:text-sm text-slate-400 mt-1">
+                    霧深き夜の森をさまよい、焚き火を囲んで正体を見抜け
+                </p>
+            </div>
+
+            <!-- Step 1: Player Name & Control Type Selection -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                <!-- Name Input -->
+                <div class="bg-slate-900/80 p-4 rounded-2xl border border-slate-700/70">
+                    <label class="block text-xs font-bold text-amber-300 uppercase tracking-wider mb-2">
+                        <i class="fa-solid fa-user-tag mr-1"></i> あなたの名前
+                    </label>
+                    <input type="text" id="input-player-name" maxlength="12" placeholder="名前を入力..."
+                        class="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-medium text-sm focus:outline-none focus:border-amber-400 transition">
+                    <p class="text-[11px] text-slate-400 mt-1.5">※頭上のネームプレートに表示されます</p>
+                </div>
+
+                <!-- Control Method Selector -->
+                <div class="bg-slate-900/80 p-4 rounded-2xl border border-slate-700/70">
+                    <label class="block text-xs font-bold text-amber-300 uppercase tracking-wider mb-2">
+                        <i class="fa-solid fa-gamepad mr-1"></i> 操作方法の選択
+                    </label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button type="button" id="btn-ctrl-kb" onclick="selectControlMode('kb')"
+                            class="flex flex-col items-center justify-center p-2.5 rounded-xl border-2 border-amber-500 bg-amber-500/20 text-white transition">
+                            <i class="fa-solid fa-keyboard text-lg mb-1 text-amber-300"></i>
+                            <span class="text-xs font-bold">キーマウ操作</span>
+                            <span class="text-[10px] text-slate-300">WASD + マウス</span>
+                        </button>
+                        <button type="button" id="btn-ctrl-touch" onclick="selectControlMode('touch')"
+                            class="flex flex-col items-center justify-center p-2.5 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-slate-300 hover:bg-slate-800 transition">
+                            <i class="fa-solid fa-mobile-screen-button text-lg mb-1 text-sky-300"></i>
+                            <span class="text-xs font-bold">タッチ操作</span>
+                            <span class="text-[10px] text-slate-400">仮想パッド + スワイプ</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs: Create Game (Moderator) vs Join Game (Player) -->
+            <div class="flex rounded-xl bg-slate-950 p-1 mb-5 border border-slate-800">
+                <button type="button" id="tab-host" onclick="switchSetupTab('host')"
+                    class="flex-1 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition bg-amber-600 text-white shadow">
+                    <i class="fa-solid fa-ghost mr-1.5"></i> 司会として部屋を作成 (Host)
+                </button>
+                <button type="button" id="tab-join" onclick="switchSetupTab('join')"
+                    class="flex-1 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition text-slate-400 hover:text-white">
+                    <i class="fa-solid fa-door-open mr-1.5"></i> 招待URL / IDで参加 (Join)
+                </button>
+            </div>
+
+            <!-- Panel: Host (Create Room as Moderator Ghost) -->
+            <div id="panel-host" class="space-y-4">
+                <div class="bg-indigo-950/50 border border-indigo-500/30 rounded-2xl p-4 text-xs sm:text-sm text-indigo-200 leading-relaxed">
+                    <div class="font-bold text-indigo-300 mb-1 flex items-center gap-1.5">
+                        <i class="fa-solid fa-crown text-amber-400"></i> 司会（ゲーム作成者）の特権ルール
+                    </div>
+                    <ul class="list-disc list-inside space-y-1 text-xs text-slate-300">
+                        <li>ゲームを作成したあなたは必ず<strong>「司会（幽霊）」</strong>として森に降り立ちます。</li>
+                        <li>幽霊として空を飛び回り、全員の<strong>役職（たかねこ・騎士・占い師・市民）</strong>を透視しながら観戦できます。</li>
+                        <li>部屋を作成すると<strong>招待用URL</strong>が発行され、友達にシェアしてマルチプレイが可能です（AIボットも追加可能）。</li>
+                    </ul>
+                </div>
+                <button type="button" id="btn-create-room" onclick="startHostGame()"
+                    class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 via-orange-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white font-bold text-base shadow-lg shadow-orange-950/60 transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 司会（幽霊）として森を生成する
+                </button>
+            </div>
+
+            <!-- Panel: Join (Client Player) -->
+            <div id="panel-join" class="space-y-4 hidden">
+                <div class="bg-slate-900/90 border border-slate-700/80 rounded-2xl p-4">
+                    <label class="block text-xs font-bold text-sky-300 uppercase tracking-wider mb-2">
+                        <i class="fa-solid fa-link mr-1"></i> 招待URL または ルームIDを入力
+                    </label>
+                    <input type="text" id="input-room-id" placeholder="招待URLまたはルームIDを貼り付け..."
+                        class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-sm focus:outline-none focus:border-sky-400 transition">
+                    <p class="text-[11px] text-slate-400 mt-2">
+                        ※司会から共有されたURLでアクセスした場合は自動入力されます。URLをそのまま貼り付けても参加できます。
+                    </p>
+                </div>
+                <button type="button" id="btn-join-room" onclick="joinClientGame()"
+                    class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold text-base shadow-lg shadow-indigo-950/60 transition flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-person-walking-arrow-right"></i> 薄暗い森へ足を踏み入れる
+                </button>
+            </div>
+
+            <!-- Role Guide Accordion / Footer -->
+            <div class="mt-6 pt-4 border-t border-slate-800/90 grid grid-cols-2 sm:grid-cols-4 gap-2 text-left">
+                <div class="bg-red-950/30 border border-red-500/20 rounded-xl p-2.5">
+                    <div class="text-xs font-bold text-red-400 flex items-center gap-1">
+                        <span>🐾</span> たかねこ（人狼）
+                    </div>
+                    <p class="text-[10px] text-slate-400 mt-1">夜に1人を襲撃。人間と同数以下まで減らせば勝利。</p>
+                </div>
+                <div class="bg-sky-950/30 border border-sky-500/20 rounded-xl p-2.5">
+                    <div class="text-xs font-bold text-sky-400 flex items-center gap-1">
+                        <span>🛡️</span> 騎士
+                    </div>
+                    <p class="text-[10px] text-slate-400 mt-1">夜に1人を護衛し、たかねこの襲撃から守る。</p>
+                </div>
+                <div class="bg-purple-950/30 border border-purple-500/20 rounded-xl p-2.5">
+                    <div class="text-xs font-bold text-purple-400 flex items-center gap-1">
+                        <span>🔮</span> 占い師
+                    </div>
+                    <p class="text-[10px] text-slate-400 mt-1">夜に1人を占い、たかねこか人間かを見抜く。</p>
+                </div>
+                <div class="bg-emerald-950/30 border border-emerald-500/20 rounded-xl p-2.5">
+                    <div class="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                        <span>🏮</span> 市民
+                    </div>
+                    <p class="text-[10px] text-slate-400 mt-1">森を探索し議論と投票でたかねこを追放する。</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- IN-GAME HUD OVERLAY                        -->
+    <!-- ========================================== -->
+    <div id="game-hud" class="fixed inset-0 z-20 pointer-events-none hidden flex flex-col justify-between p-2.5 sm:p-4">
+
+        <!-- TOP HUD BAR -->
+        <div class="flex flex-wrap items-start justify-between gap-2 pointer-events-auto">
+            <!-- Left: Phase, Day & Role Status -->
+            <div class="glass-panel rounded-2xl px-3.5 py-2.5 flex items-center gap-3 border border-slate-700/70">
+                <div id="hud-phase-icon" class="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-xl">
+                    🏕️
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span id="hud-day-badge" class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-slate-800 text-amber-300 border border-amber-500/30">
+                            ロビー待機中
+                        </span>
+                        <span id="hud-timer" class="text-xs font-mono font-bold text-rose-400 hidden">01:30</span>
+                    </div>
+                    <div id="hud-phase-title" class="text-sm sm:text-base font-bold text-white">参加者を待っています</div>
+                </div>
+                <div class="h-8 w-px bg-slate-700/70 mx-1"></div>
+                <!-- Own Role Badge -->
+                <div class="text-left">
+                    <div class="text-[10px] text-slate-400">あなたの立場</div>
+                    <div id="hud-my-role" class="text-xs sm:text-sm font-extrabold text-amber-300 flex items-center gap-1">
+                        👻 司会（幽霊観戦）
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Quick Controls & Invite Link -->
+            <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <!-- Gather at Campfire Button -->
+                <button type="button" onclick="teleportToCampfire()" title="焚き火広場へ戻る"
+                    class="glass-panel hover:bg-slate-800/90 text-amber-300 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition">
+                    <i class="fa-solid fa-fire-flame-curved"></i>
+                    <span class="hidden sm:inline">焚き火へ移動</span>
+                </button>
+
+                <!-- Camera View Toggle (1st / 3rd Person) -->
+                <button type="button" onclick="toggleCameraPerspective()" id="btn-cam-mode"
+                    class="glass-panel hover:bg-slate-800/90 text-slate-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition">
+                    <i class="fa-solid fa-camera-rotate"></i>
+                    <span id="label-cam-mode" class="hidden sm:inline">三人称視点</span>
+                </button>
+
+                <!-- Control Mode Switch (KB/Mouse <-> Touch) -->
+                <button type="button" onclick="toggleInGameControlMode()" id="btn-hud-ctrl"
+                    class="glass-panel hover:bg-slate-800/90 text-sky-300 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition">
+                    <i class="fa-solid fa-gamepad"></i>
+                    <span id="label-hud-ctrl">キーマウ</span>
+                </button>
+
+                <!-- Audio Mute Toggle -->
+                <button type="button" onclick="toggleAudioMute()" id="btn-mute"
+                    class="glass-panel hover:bg-slate-800/90 text-slate-300 w-9 h-9 rounded-xl text-xs flex items-center justify-center transition">
+                    <i class="fa-solid fa-volume-high" id="icon-mute"></i>
+                </button>
+
+                <!-- Moderator / Lobby Drawer Toggle -->
+                <button type="button" onclick="toggleSidePanel()" id="btn-toggle-panel"
+                    class="bg-amber-600 hover:bg-amber-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg transition">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span id="label-toggle-panel">進行・参加者パネル</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- MIDDLE AREA: ROLE ACTION / VOTING BANNER & SIDE PANEL -->
+        <div class="relative flex-1 flex items-center justify-between my-2 overflow-hidden">
+
+            <!-- Left Interactive Action Box (Voting / Night Ability / Role Card) -->
+            <div id="action-card-container" class="pointer-events-auto max-w-sm w-full sm:w-80 transition-all z-20 hidden">
+                <div class="glass-panel-gold rounded-2xl p-4 border border-amber-500/40 shadow-2xl">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 id="action-card-title" class="text-sm font-extrabold text-amber-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-moon"></i> 夜の能力行使
+                        </h3>
+                        <span id="action-card-badge" class="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-200">未選択</span>
+                    </div>
+                    <p id="action-card-desc" class="text-xs text-slate-300 mb-3">
+                        対象となるプレイヤーを選択してください。
+                    </p>
+                    <div id="action-targets-list" class="space-y-1.5 max-h-48 overflow-y-auto pr-1"></div>
+                </div>
+            </div>
+
+            <!-- Right Collapsible Management & Player List Drawer -->
+            <div id="side-drawer" class="pointer-events-auto ml-auto h-full max-h-[72vh] w-full sm:w-96 glass-panel rounded-2xl p-4 flex flex-col justify-between overflow-y-auto z-30 transition-transform duration-300">
+                <div class="space-y-4">
+                    <!-- Drawer Header -->
+                    <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-users-viewfinder text-amber-400"></i>
+                            <h2 class="text-sm font-extrabold text-white">森の滞在者・司会進行</h2>
+                        </div>
+                        <button type="button" onclick="toggleSidePanel()" class="text-slate-400 hover:text-white text-sm px-2">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+
+                    <!-- Invite URL Box -->
+                    <div class="bg-slate-900/90 border border-slate-700/80 rounded-xl p-3 space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold text-amber-300 flex items-center gap-1">
+                                <i class="fa-solid fa-share-nodes"></i> マルチプレイ招待URL
+                            </span>
+                            <span id="p2p-status-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/30">
+                                P2P接続中
+                            </span>
+                        </div>
+                        <div class="flex gap-1.5">
+                            <input type="text" id="invite-url-display" readonly
+                                class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-slate-300 focus:outline-none">
+                            <button type="button" onclick="copyInviteUrl()"
+                                class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition">
+                                <i class="fa-regular fa-copy mr-1"></i>URLコピー
+                            </button>
+                        </div>
+                        <div class="flex items-center justify-between text-[11px] text-slate-400">
+                            <span>ルームID: <code id="room-id-code" class="text-sky-300 font-mono font-bold">---</code></span>
+                            <button type="button" onclick="copyRoomIdOnly()" class="text-sky-400 hover:underline">
+                                IDのみコピー
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- MODERATOR-ONLY CONTROLS -->
+                    <div id="moderator-controls" class="space-y-3 bg-indigo-950/35 border border-indigo-500/30 rounded-xl p-3 hidden">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-extrabold text-indigo-300 flex items-center gap-1.5">
+                                <i class="fa-solid fa-ghost text-amber-400"></i> 司会（幽霊）専用パネル
+                            </span>
+                            <button type="button" onclick="addAiBot()" id="btn-add-bot"
+                                class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg text-[11px] font-bold transition">
+                                <i class="fa-solid fa-robot mr-1"></i>AIボット追加
+                            </button>
+                        </div>
+
+                        <!-- Role Selection Mode Switcher (Only in Lobby) -->
+                        <div id="mod-role-config-box" class="space-y-2.5 pt-1 border-t border-indigo-500/20">
+                            <div class="text-[11px] font-bold text-slate-300">役職の決定モード</div>
+                            <div class="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                                <button type="button" id="btn-mode-random" onclick="setRoleAssignMode('random')"
+                                    class="py-1.5 rounded-md text-[11px] font-bold bg-amber-600 text-white transition">
+                                    🎲 ランダムモード
+                                </button>
+                                <button type="button" id="btn-mode-manual" onclick="setRoleAssignMode('manual')"
+                                    class="py-1.5 rounded-md text-[11px] font-bold text-slate-400 hover:text-white transition">
+                                    👆 司会指名モード
+                                </button>
+                            </div>
+
+                            <!-- Random Mode Role Counts -->
+                            <div id="random-counts-panel" class="space-y-1.5 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                                <div class="flex items-center justify-between text-[11px]">
+                                    <span class="text-red-300 font-bold">🐾 たかねこ（人狼）</span>
+                                    <div class="flex items-center gap-2">
+                                        <button onclick="adjustRoleCount('TAKANERO', -1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-white font-bold">-</button>
+                                        <span id="count-TAKANERO" class="w-4 text-center font-bold">1</span>
+                                        <button onclick="adjustRoleCount('TAKANERO', 1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-white font-bold">+</button>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between text-[11px]">
+                                    <span class="text-sky-300 font-bold">🛡️ 騎士</span>
+                                    <div class="flex items-center gap-2">
+                                        <button onclick="adjustRoleCount('KNIGHT', -1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-white font-bold">-</button>
+                                        <span id="count-KNIGHT" class="w-4 text-center font-bold">1</span>
+                                        <button onclick="adjustRoleCount('KNIGHT', 1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-white font-bold">+</button>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between text-[11px]">
+                                    <span class="text-purple-300 font-bold">🔮 占い師</span>
+                                    <div class="flex items-center gap-2">
+                                        <button onclick="adjustRoleCount('SEER', -1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-white font-bold">-</button>
+                                        <span id="count-SEER" class="w-4 text-center font-bold">1</span>
+                                        <button onclick="adjustRoleCount('SEER', 1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-white font-bold">+</button>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800">
+                                    <span class="text-emerald-300 font-bold">🏮 市民（残り自動割当）</span>
+                                    <span id="count-CITIZEN" class="font-bold text-emerald-300">1</span>
+                                </div>
+                            </div>
+
+                            <div id="manual-mode-hint" class="hidden text-[11px] text-amber-300 bg-amber-950/40 border border-amber-500/30 rounded-lg p-2">
+                                💡 下の参加者リストから、各プレイヤーの役職を直接プルダウンで選択してください。
+                            </div>
+                        </div>
+
+                        <!-- Phase Progression Buttons for Moderator -->
+                        <div class="space-y-1.5 pt-2 border-t border-indigo-500/20">
+                            <div class="text-[11px] font-bold text-slate-300">ゲーム進行コントロール</div>
+                            <div class="grid grid-cols-2 gap-1.5">
+                                <button type="button" id="btn-mod-start" onclick="moderatorStartGame()"
+                                    class="col-span-2 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white font-extrabold text-xs shadow-lg transition">
+                                    <i class="fa-solid fa-play mr-1"></i> 役職を配ってゲーム開始！
+                                </button>
+                                <button type="button" id="btn-mod-next-phase" onclick="moderatorNextPhase()"
+                                    class="col-span-2 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs hidden transition">
+                                    <i class="fa-solid fa-forward-step mr-1"></i> 次のフェーズへ進める
+                                </button>
+                            </div>
+                            <!-- Moderator Live Night Log -->
+                            <div id="mod-night-monitor" class="hidden mt-2 bg-slate-950/90 border border-slate-800 rounded-lg p-2 text-[11px] space-y-1">
+                                <div class="text-amber-300 font-bold">👁️ 司会透視モニター（夜の行動状況）</div>
+                                <div id="mod-monitor-content" class="text-slate-300 space-y-0.5">待機中...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Player List (with Teleport for Ghost & Manual Role Select for Mod) -->
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between text-xs font-bold text-slate-300">
+                            <span>参加者一覧 (<span id="player-count-num">0</span>名 + 司会)</span>
+                            <span class="text-[10px] text-slate-400">幽霊はクリックで瞬間移動</span>
+                        </div>
+                        <div id="players-list-container" class="space-y-1.5 max-h-60 overflow-y-auto pr-1"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- BOTTOM HUD AREA: CHAT, TOUCH CONTROLS & GHOST CONTROLS -->
+        <div class="flex items-end justify-between gap-2 pointer-events-none relative">
+
+            <!-- Bottom-Left: Chat Box OR Virtual Joystick -->
+            <div class="flex flex-col gap-2 w-72 sm:w-80 pointer-events-auto">
+                <!-- Chat Log Box -->
+                <div class="glass-panel rounded-2xl p-2.5 border border-slate-700/70 flex flex-col h-40 sm:h-48">
+                    <div class="flex items-center justify-between text-[10px] font-bold text-slate-400 pb-1.5 mb-1 border-b border-slate-800">
+                        <span id="chat-channel-label" class="text-amber-300"><i class="fa-regular fa-comments mr-1"></i>森の会話ログ</span>
+                        <span id="ghost-chat-badge" class="hidden text-indigo-300 bg-indigo-950/90 px-1.5 py-0.5 rounded">👻 幽霊・司会チャット可</span>
+                    </div>
+                    <div id="chat-messages" class="flex-1 overflow-y-auto space-y-1 text-xs pr-1"></div>
+                    <form onsubmit="sendChatMessage(event)" class="mt-1.5 flex gap-1">
+                        <input type="text" id="chat-input" maxlength="100" placeholder="メッセージを入力..."
+                            class="flex-1 bg-slate-950/90 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-amber-400">
+                        <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold">
+                            送信
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Center-Bottom: Keyboard Hint OR Ghost Flight Buttons -->
+            <div class="flex flex-col items-center gap-2 pointer-events-auto">
+                <!-- Ghost Flight Elevation Controls (Shown for Moderator & Dead Players) -->
+                <div id="ghost-flight-controls" class="glass-panel px-3 py-1.5 rounded-full flex items-center gap-2 border border-indigo-500/40">
+                    <span class="text-[11px] font-bold text-indigo-300"><i class="fa-solid fa-ghost mr-1"></i>幽霊飛行:</span>
+                    <button type="button" onmousedown="setGhostVertical(1)" onmouseup="setGhostVertical(0)" ontouchstart="setGhostVertical(1)" ontouchend="setGhostVertical(0)"
+                        class="bg-indigo-600/80 hover:bg-indigo-500 active:scale-95 text-white px-2.5 py-1 rounded-full text-xs font-bold">
+                        <i class="fa-solid fa-arrow-up mr-1"></i>上昇 (Space)
+                    </button>
+                    <button type="button" onmousedown="setGhostVertical(-1)" onmouseup="setGhostVertical(0)" ontouchstart="setGhostVertical(-1)" ontouchend="setGhostVertical(0)"
+                        class="bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 px-2.5 py-1 rounded-full text-xs font-bold">
+                        <i class="fa-solid fa-arrow-down mr-1"></i>下降 (Shift)
+                    </button>
+                </div>
+
+                <!-- Keyboard Controls Hint Bar -->
+                <div id="kb-hint-bar" class="glass-panel px-3 py-1 rounded-full text-[11px] text-slate-300 hidden sm:flex items-center gap-3">
+                    <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-amber-300">WASD</kbd> 移動</span>
+                    <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-amber-300">マウスドラッグ</kbd> 視点回転</span>
+                    <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-amber-300">Space/Shift</kbd> 幽霊上下移動</span>
+                </div>
+            </div>
+
+            <!-- Bottom-Right: Touch Virtual Joystick & Swipe Pad (Visible in Touch Mode) -->
+            <div id="touch-controls-wrapper" class="hidden pointer-events-auto flex items-center gap-3">
+                <div id="joystick-zone" class="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-slate-900/75 border-2 border-amber-500/40 flex items-center justify-center shadow-inner">
+                    <div id="joystick-knob" class="w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-orange-600 shadow-lg pointer-events-none transition-transform duration-75"></div>
+                    <span class="absolute bottom-1.5 text-[9px] text-amber-200/70 font-bold uppercase pointer-events-none">MOVE</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Touch Camera Look Zone (Right half of screen when in touch mode) -->
+    <div id="look-zone" class="fixed top-16 right-0 bottom-36 w-1/2 z-10 hidden"></div>
+
+    <!-- ========================================== -->
+    <!-- VICTORY / GAME OVER MODAL                  -->
+    <!-- ========================================== -->
+    <div id="victory-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md hidden">
+        <div class="glass-panel-gold max-w-lg w-full rounded-3xl p-6 sm:p-8 text-center border border-amber-500/50 space-y-4">
+            <div id="victory-icon" class="text-5xl sm:text-6xl animate-bounce">🐾</div>
+            <div id="victory-team-badge" class="inline-block px-3 py-1 rounded-full text-xs font-extrabold bg-red-900/70 text-red-200 border border-red-400/40">
+                たかねこ（人狼）陣営の勝利
+            </div>
+            <h2 id="victory-title" class="font-mincho text-2xl sm:text-4xl font-extrabold text-white">
+                薄暗い森はたかねこに支配された…
+            </h2>
+            <p id="victory-desc" class="text-xs sm:text-sm text-slate-300"></p>
+
+            <!-- Full Role Reveal Table -->
+            <div class="bg-slate-950/80 rounded-2xl p-3 border border-slate-800 text-left max-h-52 overflow-y-auto space-y-1.5" id="victory-roles-list"></div>
+
+            <div class="pt-2 flex gap-2 justify-center">
+                <button type="button" id="btn-victory-reset" onclick="moderatorResetToLobby()"
+                    class="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-bold text-sm shadow-lg hidden">
+                    <i class="fa-solid fa-rotate-left mr-1.5"></i> ロビーへ戻って再戦する（司会）
+                </button>
+                <button type="button" onclick="document.getElementById('victory-modal').classList.add('hidden')"
+                    class="px-5 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-sm">
+                    森を観戦し続ける
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /********************************************************************
+         * 1. GAME CONSTANTS, ROLES & STATE ARCHITECTURE
+         ********************************************************************/
+        const ROLES = {
+            MODERATOR: {
+                id: 'MODERATOR',
+                name: '司会（幽霊）',
+                emoji: '👻',
+                team: 'SPECTATOR',
+                color: '#818cf8',
+                desc: 'ゲームを作成した司会者。最初から幽霊として空を飛び、全員の役職と夜の行動を透視しながら進行します。'
+            },
+            TAKANERO: {
+                id: 'TAKANERO',
+                name: 'たかねこ（人狼）',
+                emoji: '🐾',
+                team: 'WEREWOLF',
+                color: '#f87171',
+                desc: '薄暗い森に潜む人狼。仲間のたかねこを知っており、夜に1人を襲撃できます。生存する人間と同数以下になれば勝利！'
+            },
+            KNIGHT: {
+                id: 'KNIGHT',
+                name: '騎士',
+                emoji: '🛡️',
+                team: 'HUMAN',
+                color: '#38bdf8',
+                desc: '市民陣営の守護者。毎晩1人を指定して護衛し、たかねこの襲撃から守ることができます。'
+            },
+            SEER: {
+                id: 'SEER',
+                name: '占い師',
+                emoji: '🔮',
+                team: 'HUMAN',
+                color: '#c084fc',
+                desc: '市民陣営の導き手。毎晩1人を占い、その人物が「たかねこ（人狼）」か「人間」かを知ることができます。'
+            },
+            CITIZEN: {
+                id: 'CITIZEN',
+                name: '市民',
+                emoji: '🏮',
+                team: 'HUMAN',
+                color: '#34d399',
+                desc: '森に迷い込んだ善良な市民。特別な夜の能力はありませんが、議論と投票でたかねこを見抜き追放しましょう。'
+            }
+        };
+
+        const PHASES = {
+            LOBBY: { id: 'LOBBY', name: '参加者を待っています', badge: 'ロビー待機中', icon: '🏕️', duration: 0 },
+            ROLE_REVEAL: { id: 'ROLE_REVEAL', name: '役職確認・森への降臨', badge: '役職確認', icon: '📜', duration: 15 },
+            DAY_DISCUSSION: { id: 'DAY_DISCUSSION', name: '森の探索・焚き火での議論', badge: '昼：議論フェーズ', icon: '🔥', duration: 75 },
+            VOTING: { id: 'VOTING', name: '追放する人物への投票', badge: '夕：処刑投票', icon: '⚖️', duration: 40 },
+            NIGHT: { id: 'NIGHT', name: '薄暗い森の夜・能力行使', badge: '夜：能力行使', icon: '🌙', duration: 45 },
+            DAWN: { id: 'DAWN', name: '夜明け・昨晩の犠牲者発表', badge: '朝：結果発表', icon: '🌅', duration: 15 },
+            GAME_OVER: { id: 'GAME_OVER', name: '決着・すべての真実', badge: 'ゲーム終了', icon: '🏆', duration: 0 }
+        };
+
+        const AVATAR_COLORS = [
+            0xe11d48, 0x2563eb, 0x059669, 0xd97706, 0x7c3aed,
+            0xdb2777, 0x0891b2, 0x65a30d, 0x4f46e5, 0xea580c
+        ];
+
+        // Global Local & Network State
+        const state = {
+            myId: '',
+            myName: '旅人',
+            isHost: false, // Host is strictly Moderator & Ghost
+            roomId: '',
+            controlMode: 'kb', // 'kb' | 'touch'
+            cameraThirdPerson: true,
+            audioMuted: false,
+
+            // Game Sync State (Authoritative on Host)
+            phase: 'LOBBY',
+            dayCount: 1,
+            timerSeconds: 0,
+            roleAssignMode: 'random', // 'random' | 'manual'
+            roleCounts: { TAKANERO: 1, KNIGHT: 1, SEER: 1, CITIZEN: 1 },
+            players: {}, // id -> { id, name, isModerator, isBot, role, alive, isGhost, x, y, z, rotY, color, manualRole }
+
+            // Round Actions (Host tracks all, sends relevant info)
+            votes: {},        // voterId -> targetId
+            nightActions: {   // role actions during NIGHT
+                takanekoTarget: null,
+                knightTarget: null,
+                seerTargets: {} // seerId -> targetId
+            },
+            seerResults: {},  // seerId -> [{ day, targetName, isTakaneko }]
+            mySelectedTarget: null
+        };
+
+        // Networking (PeerJS)
+        let peer = null;
+        let hostConn = null;          // For client: connection to host
+        let clientConns = new Map();  // For host: peerId -> DataConnection
+
+        /********************************************************************
+         * 2. SYNTHESIZED SOUND ENGINE (Web Audio API)
+         ********************************************************************/
+        let audioCtx = null;
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) audioCtx = new AudioContext();
+            }
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(type) {
+            if (state.audioMuted) return;
+            try {
+                initAudio();
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+
+                if (type === 'click') {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(520, now);
+                    osc.frequency.exponentialRampToValueAtTime(780, now + 0.06);
+                    gain.gain.setValueAtTime(0.08, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now);
+                    osc.stop(now + 0.07);
+                } else if (type === 'night') {
+                    // Eerie dark chord
+                    [220, 261.63, 329.63].forEach((freq, idx) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'triangle';
+                        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+                        osc.frequency.exponentialRampToValueAtTime(freq * 0.96, now + 1.4);
+                        gain.gain.setValueAtTime(0.08, now + idx * 0.08);
+                        gain.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.start(now + idx * 0.08);
+                        osc.stop(now + 1.5);
+                    });
+                } else if (type === 'dawn' || type === 'bell') {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(587.33, now);
+                    osc.frequency.exponentialRampToValueAtTime(880, now + 0.4);
+                    gain.gain.setValueAtTime(0.12, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now);
+                    osc.stop(now + 1.0);
+                }
+            } catch (e) {
+                // Ignore audio context restrictions
+            }
+        }
+
+        function toggleAudioMute() {
+            state.audioMuted = !state.audioMuted;
+            const icon = document.getElementById('icon-mute');
+            icon.className = state.audioMuted ? 'fa-solid fa-volume-xmark text-rose-400' : 'fa-solid fa-volume-high';
+            showToast(state.audioMuted ? 'サウンドをミュートしました' : 'サウンドをONにしました', 'info');
+        }
+
+        /********************************************************************
+         * 3. THREE.JS 3D DARK FOREST WORLD & AVATARS
+         ********************************************************************/
+        let scene, camera, renderer, clock;
+        let campfireLight, moonLight, ambientLight;
+        let firefliesMesh, flameGroup;
+        const avatarMeshes = new Map(); // playerId -> THREE.Group
+        const nameplateEls = new Map(); // playerId -> HTMLElement
+        const treeObstacles = [];       // { x, z, r }
+        const WORLD_RADIUS = 58;
+
+        // Local Player Physics & Camera Controls
+        const localPose = {
+            x: 0,
+            y: 3.5, // Moderator starts floating slightly above ground
+            z: 10,
+            yaw: 0,
+            pitch: -0.12,
+            moveForward: 0,
+            moveRight: 0,
+            moveUp: 0
+        };
+        const keysPressed = {};
+
+        function initThreeWorld() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x04070d);
+            scene.fog = new THREE.FogExp2(0x060a12, 0.032);
+
+            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 160);
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            clock = new THREE.Clock();
+
+            // 1. Lighting: Eerie Moonlight & Ambient
+            ambientLight = new THREE.AmbientLight(0x1e293b, 0.55);
+            scene.add(ambientLight);
+
+            moonLight = new THREE.DirectionalLight(0x64748b, 0.7);
+            moonLight.position.set(25, 45, -30);
+            moonLight.castShadow = true;
+            moonLight.shadow.mapSize.width = 1024;
+            moonLight.shadow.mapSize.height = 1024;
+            scene.add(moonLight);
+
+            // Full Moon in the Sky
+            const moonGeo = new THREE.SphereGeometry(4.5, 24, 24);
+            const moonMat = new THREE.MeshBasicMaterial({ color: 0xfef3c7, fog: false });
+            const moonMesh = new THREE.Mesh(moonGeo, moonMat);
+            moonMesh.position.set(40, 55, -65);
+            scene.add(moonMesh);
+
+            // 2. Forest Ground with Subtle Undulations
+            const groundGeo = new THREE.CircleGeometry(WORLD_RADIUS + 12, 64);
+            groundGeo.rotateX(-Math.PI / 2);
+            const groundMat = new THREE.MeshStandardMaterial({
+                color: 0x0b131e,
+                roughness: 0.95,
+                metalness: 0.05
+            });
+            const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            groundMesh.receiveShadow = true;
+            scene.add(groundMesh);
+
+            // Stone Path Ring around Campfire
+            const ringGeo = new THREE.RingGeometry(2.2, 6.2, 32);
+            ringGeo.rotateX(-Math.PI / 2);
+            const ringMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
+            const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+            ringMesh.position.y = 0.02;
+            scene.add(ringMesh);
+
+            // 3. Central Campfire & Log Benches
+            buildCampfireCenter();
+
+            // 4. Procedural Dark Forest Trees, Rocks & Glowing Mushrooms
+            buildProceduralForest();
+
+            // 5. Floating Fireflies Particle System
+            buildFireflies();
+
+            window.addEventListener('resize', onWindowResize);
+            setupInputListeners();
+        }
+
+        function buildCampfireCenter() {
+            const campGroup = new THREE.Group();
+
+            // Stones around fire
+            const stoneGeo = new THREE.DodecahedronGeometry(0.32, 0);
+            const stoneMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.85 });
+            for (let i = 0; i < 12; i++) {
+                const angle = (i / 12) * Math.PI * 2;
+                const stone = new THREE.Mesh(stoneGeo, stoneMat);
+                stone.position.set(Math.cos(angle) * 1.15, 0.16, Math.sin(angle) * 1.15);
+                stone.rotation.set(i, i * 0.5, 0);
+                campGroup.add(stone);
+            }
+
+            // Firewood logs
+            const logGeo = new THREE.CylinderGeometry(0.14, 0.16, 1.8, 8);
+            const logMat = new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.9 });
+            for (let i = 0; i < 4; i++) {
+                const log = new THREE.Mesh(logGeo, logMat);
+                log.position.y = 0.25;
+                log.rotation.z = Math.PI / 2.3;
+                log.rotation.y = (i / 4) * Math.PI;
+                campGroup.add(log);
+            }
+
+            // Animated Flames
+            flameGroup = new THREE.Group();
+            const outerFlameGeo = new THREE.ConeGeometry(0.65, 1.6, 8);
+            const outerFlameMat = new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.85 });
+            const outerFlame = new THREE.Mesh(outerFlameGeo, outerFlameMat);
+            outerFlame.position.y = 0.8;
+            flameGroup.add(outerFlame);
+
+            const innerFlameGeo = new THREE.ConeGeometry(0.38, 1.1, 8);
+            const innerFlameMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+            const innerFlame = new THREE.Mesh(innerFlameGeo, innerFlameMat);
+            innerFlame.position.y = 0.65;
+            flameGroup.add(innerFlame);
+            campGroup.add(flameGroup);
+
+            // Warm Campfire PointLight
+            campfireLight = new THREE.PointLight(0xff7b00, 2.6, 26, 1.5);
+            campfireLight.position.set(0, 1.6, 0);
+            campfireLight.castShadow = true;
+            campGroup.add(campfireLight);
+
+            // Log Benches around campfire for players to gather
+            const benchGeo = new THREE.CylinderGeometry(0.28, 0.28, 2.6, 10);
+            const benchMat = new THREE.MeshStandardMaterial({ color: 0x3b2314, roughness: 0.9 });
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2;
+                const bench = new THREE.Mesh(benchGeo, benchMat);
+                bench.position.set(Math.cos(angle) * 4.4, 0.25, Math.sin(angle) * 4.4);
+                bench.rotation.z = Math.PI / 2;
+                bench.rotation.y = -angle;
+                bench.castShadow = true;
+                bench.receiveShadow = true;
+                campGroup.add(bench);
+            }
+
+            treeObstacles.push({ x: 0, z: 0, r: 1.4 });
+            scene.add(campGroup);
+        }
+
+        function buildProceduralForest() {
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x1e1510, roughness: 0.95 });
+            const leavesMat1 = new THREE.MeshStandardMaterial({ color: 0x0a221c, roughness: 0.85 });
+            const leavesMat2 = new THREE.MeshStandardMaterial({ color: 0x0f2922, roughness: 0.85 });
+            const rockMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
+            const glowCapMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+
+            // Deterministic pseudo-random so forest looks cohesive
+            let seed = 1337;
+            const rand = () => {
+                seed = (seed * 16807) % 2147483647;
+                return (seed - 1) / 2147483646;
+            };
+
+            // Generate 135 dark pine trees outside the central clearing
+            for (let i = 0; i < 135; i++) {
+                const angle = rand() * Math.PI * 2;
+                const dist = 8.5 + Math.pow(rand(), 0.85) * (WORLD_RADIUS - 9);
+                const tx = Math.cos(angle) * dist;
+                const tz = Math.sin(angle) * dist;
+                const scale = 0.8 + rand() * 0.9;
+
+                const tree = new THREE.Group();
+                tree.position.set(tx, 0, tz);
+
+                const trunkGeo = new THREE.CylinderGeometry(0.22 * scale, 0.38 * scale, 2.8 * scale, 7);
+                const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+                trunk.position.y = 1.4 * scale;
+                trunk.castShadow = true;
+                tree.add(trunk);
+
+                // 3 tiers of dark pine needles
+                for (let tier = 0; tier < 3; tier++) {
+                    const coneRadius = (2.1 - tier * 0.45) * scale;
+                    const coneHeight = (3.2 - tier * 0.4) * scale;
+                    const coneGeo = new THREE.ConeGeometry(coneRadius, coneHeight, 7);
+                    const cone = new THREE.Mesh(coneGeo, tier % 2 === 0 ? leavesMat1 : leavesMat2);
+                    cone.position.y = (3.0 + tier * 1.65) * scale;
+                    cone.castShadow = true;
+                    tree.add(cone);
+                }
+
+                scene.add(tree);
+                treeObstacles.push({ x: tx, z: tz, r: 0.65 * scale });
+            }
+
+            // Generate mysterious glowing blue forest mushrooms & rocks
+            for (let i = 0; i < 45; i++) {
+                const angle = rand() * Math.PI * 2;
+                const dist = 7 + rand() * (WORLD_RADIUS - 10);
+                const rx = Math.cos(angle) * dist;
+                const rz = Math.sin(angle) * dist;
+
+                if (i % 2 === 0) {
+                    const rockGeo = new THREE.DodecahedronGeometry(0.4 + rand() * 0.6, 0);
+                    const rock = new THREE.Mesh(rockGeo, rockMat);
+                    rock.position.set(rx, 0.25, rz);
+                    rock.rotation.set(rand(), rand(), rand());
+                    scene.add(rock);
+                } else {
+                    const shroomGroup = new THREE.Group();
+                    shroomGroup.position.set(rx, 0, rz);
+                    const stem = new THREE.Mesh(
+                        new THREE.CylinderGeometry(0.04, 0.06, 0.35, 6),
+                        new THREE.MeshBasicMaterial({ color: 0xcbd5e1 })
+                    );
+                    stem.position.y = 0.17;
+                    const cap = new THREE.Mesh(
+                        new THREE.ConeGeometry(0.18, 0.16, 8),
+                        glowCapMat
+                    );
+                    cap.position.y = 0.36;
+                    shroomGroup.add(stem, cap);
+                    scene.add(shroomGroup);
+                }
+            }
+        }
+
+        function buildFireflies() {
+            const count = 180;
+            const geo = new THREE.BufferGeometry();
+            const positions = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = 3 + Math.random() * (WORLD_RADIUS - 6);
+                positions[i * 3] = Math.cos(angle) * r;
+                positions[i * 3 + 1] = 0.6 + Math.random() * 5.5;
+                positions[i * 3 + 2] = Math.sin(angle) * r;
+            }
+            geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const mat = new THREE.PointsMaterial({
+                color: 0xfde047,
+                size: 0.22,
+                transparent: true,
+                opacity: 0.8
+            });
+            firefliesMesh = new THREE.Points(geo, mat);
+            scene.add(firefliesMesh);
+        }
+
+        /**
+         * Creates or updates a 3D Cloaked Avatar with Lantern & Cat Ears (for Takaneko / Ghost)
+         */
+        function getOrCreateAvatar(p) {
+            if (avatarMeshes.has(p.id)) {
+                return avatarMeshes.get(p.id);
+            }
+
+            const group = new THREE.Group();
+
+            // Cloak Body
+            const cloakGeo = new THREE.ConeGeometry(0.55, 1.55, 12);
+            const cloakMat = new THREE.MeshStandardMaterial({
+                color: p.color || 0x3b82f6,
+                roughness: 0.6,
+                transparent: true,
+                opacity: 1.0
+            });
+            const cloakMesh = new THREE.Mesh(cloakGeo, cloakMat);
+            cloakMesh.position.y = 0.78;
+            cloakMesh.castShadow = true;
+            cloakMesh.name = 'cloak';
+            group.add(cloakMesh);
+
+            // Head
+            const headGeo = new THREE.SphereGeometry(0.32, 16, 16);
+            const headMat = new THREE.MeshStandardMaterial({
+                color: 0xfde68a,
+                roughness: 0.4,
+                transparent: true,
+                opacity: 1.0
+            });
+            const headMesh = new THREE.Mesh(headGeo, headMat);
+            headMesh.position.y = 1.68;
+            headMesh.name = 'head';
+            group.add(headMesh);
+
+            // Eyes (glowing dots facing -Z)
+            const eyeGeo = new THREE.SphereGeometry(0.045, 8, 8);
+            const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+            leftEye.position.set(-0.11, 1.72, -0.28);
+            const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+            rightEye.position.set(0.11, 1.72, -0.28);
+            group.add(leftEye, rightEye);
+
+            // Takaneko Cat Ears (Shown to Moderator/Ghosts or fellow Takaneko!)
+            const earsGroup = new THREE.Group();
+            earsGroup.name = 'takanekoEars';
+            const earGeo = new THREE.ConeGeometry(0.14, 0.32, 4);
+            const earMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
+            const leftEar = new THREE.Mesh(earGeo, earMat);
+            leftEar.position.set(-0.2, 2.02, 0);
+            leftEar.rotation.z = 0.25;
+            const rightEar = new THREE.Mesh(earGeo, earMat);
+            rightEar.position.set(0.2, 2.02, 0);
+            rightEar.rotation.z = -0.25;
+            earsGroup.add(leftEar, rightEar);
+            earsGroup.visible = false;
+            group.add(earsGroup);
+
+            // Hand-held Warm Lantern (at right side)
+            const lanternGroup = new THREE.Group();
+            lanternGroup.position.set(0.55, 1.05, -0.35);
+            const lanternCore = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.09, 0.09, 0.24, 8),
+                new THREE.MeshBasicMaterial({ color: 0xfef08a })
+            );
+            lanternGroup.add(lanternCore);
+
+            const lanternLight = new THREE.PointLight(0xfbbf24, 1.1, 9);
+            lanternGroup.add(lanternLight);
+            lanternGroup.name = 'lantern';
+            group.add(lanternGroup);
+
+            scene.add(group);
+            avatarMeshes.set(p.id, group);
+
+            // Create HTML Floating Nameplate
+            const np = document.createElement('div');
+            np.className = 'nameplate text-center';
+            document.getElementById('nameplates-container').appendChild(np);
+            nameplateEls.set(p.id, np);
+
+            return group;
+        }
+
+        function syncAvatarsInScene(dt) {
+            const me = state.players[state.myId];
+            const amIGhostOrMod = me && (me.isModerator || me.isGhost || !me.alive || state.phase === 'GAME_OVER');
+            const amITakaneko = me && me.role === 'TAKANERO';
+
+            // Remove stale avatars
+            for (const [id, mesh] of avatarMeshes.entries()) {
+                if (!state.players[id]) {
+                    scene.remove(mesh);
+                    avatarMeshes.delete(id);
+                    const np = nameplateEls.get(id);
+                    if (np) np.remove();
+                    nameplateEls.delete(id);
+                }
+            }
+
+            // Update current players
+            Object.values(state.players).forEach(p => {
+                const mesh = getOrCreateAvatar(p);
+                const np = nameplateEls.get(p.id);
+                const isTargetGhost = p.isModerator || p.isGhost || !p.alive;
+
+                // Visibility rule:
+                // Living players CANNOT see Ghosts (Moderator or eliminated players).
+                // Ghosts & Moderator CAN see everyone!
+                const canSeeThisAvatar = !isTargetGhost || amIGhostOrMod;
+
+                // Hide own mesh if in 1st-person mode
+                const isSelfInFirstPerson = (p.id === state.myId && !state.cameraThirdPerson);
+                mesh.visible = canSeeThisAvatar && !isSelfInFirstPerson;
+
+                // Smoothly interpolate position
+                if (p.id === state.myId) {
+                    mesh.position.set(localPose.x, localPose.y, localPose.z);
+                    mesh.rotation.y = localPose.yaw;
+                } else {
+                    mesh.position.x += ((p.x || 0) - mesh.position.x) * Math.min(1, dt * 10);
+                    mesh.position.y += ((p.y || 0) - mesh.position.y) * Math.min(1, dt * 10);
+                    mesh.position.z += ((p.z || 0) - mesh.position.z) * Math.min(1, dt * 10);
+                    mesh.rotation.y = p.rotY || 0;
+                }
+
+                // Ghost translucent appearance
+                const cloak = mesh.getObjectByName('cloak');
+                const head = mesh.getObjectByName('head');
+                const ears = mesh.getObjectByName('takanekoEars');
+                if (cloak && head) {
+                    if (isTargetGhost) {
+                        cloak.material.opacity = 0.42;
+                        cloak.material.color.setHex(p.isModerator ? 0x818cf8 : 0x94a3b8);
+                        head.material.opacity = 0.45;
+                    } else {
+                        cloak.material.opacity = 1.0;
+                        cloak.material.color.setHex(p.color || 0x3b82f6);
+                        head.material.opacity = 1.0;
+                    }
+                }
+
+                // Takaneko Cat Ears visibility (visible to Moderator/Ghosts, fellow Takaneko, or Self)
+                if (ears) {
+                    const showEars = (p.role === 'TAKANERO') && (amIGhostOrMod || amITakaneko || p.id === state.myId);
+                    ears.visible = showEars;
+                }
+
+                // Update 2D Floating Nameplate projection
+                if (np) {
+                    if (!canSeeThisAvatar || (p.id === state.myId && !state.cameraThirdPerson)) {
+                        np.style.display = 'none';
+                    } else {
+                        const headWorldPos = new THREE.Vector3(mesh.position.x, mesh.position.y + 2.35, mesh.position.z);
+                        headWorldPos.project(camera);
+
+                        if (headWorldPos.z > 1.0) {
+                            np.style.display = 'none';
+                        } else {
+                            const screenX = (headWorldPos.x * 0.5 + 0.5) * window.innerWidth;
+                            const screenY = (-(headWorldPos.y * 0.5) + 0.5) * window.innerHeight;
+                            np.style.display = 'block';
+                            np.style.left = `${screenX}px`;
+                            np.style.top = `${screenY}px`;
+
+                            // Role reveal logic on Nameplate:
+                            // Moderator & Ghosts see EVERYONE'S role above their head!
+                            // Takaneko sees fellow Takaneko!
+                            let roleBadgeHtml = '';
+                            if (p.isModerator) {
+                                roleBadgeHtml = `<span class="px-1.5 py-0.5 rounded bg-indigo-950/90 text-indigo-300 border border-indigo-400/40 text-[10px] font-bold">👻 司会</span>`;
+                            } else if (amIGhostOrMod || p.id === state.myId || (amITakaneko && p.role === 'TAKANERO')) {
+                                const rInfo = ROLES[p.role] || ROLES.CITIZEN;
+                                roleBadgeHtml = `<span class="px-1.5 py-0.5 rounded bg-slate-950/90 border border-slate-600/60 text-[10px] font-bold" style="color:${rInfo.color}">${rInfo.emoji} ${rInfo.name}</span>`;
+                            }
+
+                            const deadBadge = (!p.alive && !p.isModerator)
+                                ? `<span class="px-1 py-0.5 rounded bg-rose-950 text-rose-300 text-[9px] font-bold ml-1">💀幽霊</span>`
+                                : '';
+
+                            np.innerHTML = `
+                                <div class="flex flex-col items-center gap-0.5">
+                                    ${roleBadgeHtml}
+                                    <div class="px-2.5 py-0.5 rounded-full bg-black/75 border border-white/15 text-xs font-bold text-white shadow">
+                                        ${escapeHtml(p.name)}${deadBadge}
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+                }
+            });
+        }
+
+        /********************************************************************
+         * 4. INPUT CONTROLS (KEYBOARD/MOUSE + TOUCH JOYSTICK/SWIPE)
+         ********************************************************************/
+        let isDraggingLook = false;
+        let prevMouse = { x: 0, y: 0 };
+        let touchMoveId = null;
+        let touchLookId = null;
+        let joyOrigin = { x: 0, y: 0 };
+        let lookOrigin = { x: 0, y: 0 };
+
+        function selectControlMode(mode) {
+            state.controlMode = mode;
+            playSound('click');
+
+            const btnKb = document.getElementById('btn-ctrl-kb');
+            const btnTouch = document.getElementById('btn-ctrl-touch');
+            if (mode === 'kb') {
+                btnKb.className = 'flex flex-col items-center justify-center p-2.5 rounded-xl border-2 border-amber-500 bg-amber-500/20 text-white transition';
+                btnTouch.className = 'flex flex-col items-center justify-center p-2.5 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-slate-300 hover:bg-slate-800 transition';
+            } else {
+                btnTouch.className = 'flex flex-col items-center justify-center p-2.5 rounded-xl border-2 border-sky-400 bg-sky-500/20 text-white transition';
+                btnKb.className = 'flex flex-col items-center justify-center p-2.5 rounded-xl border-2 border-slate-700 bg-slate-800/60 text-slate-300 hover:bg-slate-800 transition';
+            }
+            applyControlModeUI();
+        }
+
+        function toggleInGameControlMode() {
+            selectControlMode(state.controlMode === 'kb' ? 'touch' : 'kb');
+            showToast(`操作モードを「${state.controlMode === 'kb' ? 'キーマウ操作' : 'タッチ操作'}」に切り替えました`, 'info');
+        }
+
+        function applyControlModeUI() {
+            const touchWrapper = document.getElementById('touch-controls-wrapper');
+            const lookZone = document.getElementById('look-zone');
+            const kbHint = document.getElementById('kb-hint-bar');
+            const labelCtrl = document.getElementById('label-hud-ctrl');
+
+            if (state.controlMode === 'touch') {
+                touchWrapper.classList.remove('hidden');
+                lookZone.classList.remove('hidden');
+                kbHint.classList.add('hidden');
+                if (labelCtrl) labelCtrl.textContent = 'タッチ操作';
+            } else {
+                touchWrapper.classList.add('hidden');
+                lookZone.classList.add('hidden');
+                kbHint.classList.remove('hidden');
+                if (labelCtrl) labelCtrl.textContent = 'キーマウ';
+            }
+        }
+
+        function toggleCameraPerspective() {
+            state.cameraThirdPerson = !state.cameraThirdPerson;
+            const label = document.getElementById('label-cam-mode');
+            if (label) label.textContent = state.cameraThirdPerson ? '三人称視点' : '一人称視点';
+            playSound('click');
+        }
+
+        function setGhostVertical(dir) {
+            localPose.moveUp = dir;
+        }
+
+        function setupInputListeners() {
+            // Keyboard Listeners
+            window.addEventListener('keydown', (e) => {
+                if (document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+                keysPressed[e.code] = true;
+            });
+            window.addEventListener('keyup', (e) => {
+                keysPressed[e.code] = false;
+            });
+
+            // Mouse Drag Look on 3D Canvas
+            const canvasEl = renderer.domElement;
+            canvasEl.addEventListener('mousedown', (e) => {
+                isDraggingLook = true;
+                prevMouse.x = e.clientX;
+                prevMouse.y = e.clientY;
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!isDraggingLook) return;
+                const dx = e.clientX - prevMouse.x;
+                const dy = e.clientY - prevMouse.y;
+                prevMouse.x = e.clientX;
+                prevMouse.y = e.clientY;
+
+                localPose.yaw -= dx * 0.0055;
+                localPose.pitch = Math.max(-1.1, Math.min(0.85, localPose.pitch - dy * 0.0045));
+            });
+            window.addEventListener('mouseup', () => {
+                isDraggingLook = false;
+            });
+
+            // Touch Virtual Joystick (Bottom-Right/Left Pad)
+            const joyZone = document.getElementById('joystick-zone');
+            const joyKnob = document.getElementById('joystick-knob');
+
+            joyZone.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const touch = e.changedTouches[0];
+                touchMoveId = touch.identifier;
+                const rect = joyZone.getBoundingClientRect();
+                joyOrigin.x = rect.left + rect.width / 2;
+                joyOrigin.y = rect.top + rect.height / 2;
+                updateJoystickTouch(touch.clientX, touch.clientY);
+            }, { passive: false });
+
+            joyZone.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    if (e.changedTouches[i].identifier === touchMoveId) {
+                        updateJoystickTouch(e.changedTouches[i].clientX, e.changedTouches[i].clientY);
+                    }
+                }
+            }, { passive: false });
+
+            const resetJoystick = (e) => {
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    if (e.changedTouches[i].identifier === touchMoveId) {
+                        touchMoveId = null;
+                        localPose.moveForward = 0;
+                        localPose.moveRight = 0;
+                        joyKnob.style.transform = `translate(0px, 0px)`;
+                    }
+                }
+            };
+            joyZone.addEventListener('touchend', resetJoystick);
+            joyZone.addEventListener('touchcancel', resetJoystick);
+
+            function updateJoystickTouch(cx, cy) {
+                const maxDist = 42;
+                let dx = cx - joyOrigin.x;
+                let dy = cy - joyOrigin.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist > maxDist) {
+                    dx = (dx / dist) * maxDist;
+                    dy = (dy / dist) * maxDist;
+                }
+                joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+                localPose.moveRight = dx / maxDist;
+                localPose.moveForward = -dy / maxDist;
+            }
+
+            // Touch Camera Look Zone
+            const lookZone = document.getElementById('look-zone');
+            lookZone.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const t = e.changedTouches[0];
+                touchLookId = t.identifier;
+                lookOrigin.x = t.clientX;
+                lookOrigin.y = t.clientY;
+            }, { passive: false });
+
+            lookZone.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    const t = e.changedTouches[i];
+                    if (t.identifier === touchLookId) {
+                        const dx = t.clientX - lookOrigin.x;
+                        const dy = t.clientY - lookOrigin.y;
+                        lookOrigin.x = t.clientX;
+                        lookOrigin.y = t.clientY;
+                        localPose.yaw -= dx * 0.0065;
+                        localPose.pitch = Math.max(-1.1, Math.min(0.85, localPose.pitch - dy * 0.0055));
+                    }
+                }
+            }, { passive: false });
+        }
+
+        function updateLocalPlayerMovement(dt) {
+            const me = state.players[state.myId];
+            if (!me) return;
+
+            const isGhostMode = me.isModerator || me.isGhost || !me.alive;
+
+            // Combine keyboard & joystick inputs
+            let fwd = localPose.moveForward;
+            let right = localPose.moveRight;
+            let up = localPose.moveUp;
+
+            if (keysPressed['KeyW'] || keysPressed['ArrowUp']) fwd = 1;
+            if (keysPressed['KeyS'] || keysPressed['ArrowDown']) fwd = -1;
+            if (keysPressed['KeyA'] || keysPressed['ArrowLeft']) right = -1;
+            if (keysPressed['KeyD'] || keysPressed['ArrowRight']) right = 1;
+            if (keysPressed['Space']) up = 1;
+            if (keysPressed['ShiftLeft'] || keysPressed['ShiftRight']) up = -1;
+
+            const speed = isGhostMode ? 11.5 : 7.0;
+
+            // Forward direction vector in XZ plane
+            const forwardX = -Math.sin(localPose.yaw);
+            const forwardZ = -Math.cos(localPose.yaw);
+            const rightX = Math.cos(localPose.yaw);
+            const rightZ = -Math.sin(localPose.yaw);
+
+            let vx = (forwardX * fwd + rightX * right);
+            let vz = (forwardZ * fwd + rightZ * right);
+            const len = Math.hypot(vx, vz);
+            if (len > 1) {
+                vx /= len;
+                vz /= len;
+            }
+
+            let nextX = localPose.x + vx * speed * dt;
+            let nextZ = localPose.z + vz * speed * dt;
+
+            // Tree & Campfire Collision for living players (Ghosts pass right through trees!)
+            if (!isGhostMode) {
+                for (let i = 0; i < treeObstacles.length; i++) {
+                    const obs = treeObstacles[i];
+                    const dx = nextX - obs.x;
+                    const dz = nextZ - obs.z;
+                    const d = Math.hypot(dx, dz);
+                    const minDist = obs.r + 0.55;
+                    if (d < minDist && d > 0.001) {
+                        nextX = obs.x + (dx / d) * minDist;
+                        nextZ = obs.z + (dz / d) * minDist;
+                    }
+                }
+            }
+
+            // World radial boundary
+            const distFromCenter = Math.hypot(nextX, nextZ);
+            if (distFromCenter > WORLD_RADIUS) {
+                nextX = (nextX / distFromCenter) * WORLD_RADIUS;
+                nextZ = (nextZ / distFromCenter) * WORLD_RADIUS;
+            }
+
+            localPose.x = nextX;
+            localPose.z = nextZ;
+
+            // Vertical flight for Ghosts & Moderator
+            if (isGhostMode) {
+                localPose.y = Math.max(0.4, Math.min(22.0, localPose.y + up * 7.5 * dt));
+            } else {
+                localPose.y = 0;
+            }
+
+            // Save into own state
+            me.x = localPose.x;
+            me.y = localPose.y;
+            me.z = localPose.z;
+            me.rotY = localPose.yaw;
+
+            // Update Camera Position (3rd Person Over-Shoulder vs 1st Person)
+            if (state.cameraThirdPerson) {
+                const camDist = 4.2;
+                const camHeight = 2.35;
+                const camX = localPose.x + Math.sin(localPose.yaw) * camDist * Math.cos(localPose.pitch);
+                const camZ = localPose.z + Math.cos(localPose.yaw) * camDist * Math.cos(localPose.pitch);
+                const camY = Math.max(0.6, localPose.y + camHeight - Math.sin(localPose.pitch) * camDist);
+
+                camera.position.set(camX, camY, camZ);
+                const lookTarget = new THREE.Vector3(
+                    localPose.x - Math.sin(localPose.yaw) * 4,
+                    localPose.y + 1.65 + Math.sin(localPose.pitch) * 3,
+                    localPose.z - Math.cos(localPose.yaw) * 4
+                );
+                camera.lookAt(lookTarget);
+            } else {
+                camera.position.set(localPose.x, localPose.y + 1.72, localPose.z);
+                const lookTarget = new THREE.Vector3(
+                    localPose.x - Math.sin(localPose.yaw) * Math.cos(localPose.pitch) * 10,
+                    localPose.y + 1.72 + Math.sin(localPose.pitch) * 10,
+                    localPose.z - Math.cos(localPose.yaw) * Math.cos(localPose.pitch) * 10
+                );
+                camera.lookAt(lookTarget);
+            }
+        }
+
+        function teleportToCampfire() {
+            const angle = Math.random() * Math.PI * 2;
+            localPose.x = Math.cos(angle) * 4.5;
+            localPose.z = Math.sin(angle) * 4.5;
+            localPose.yaw = Math.atan2(-localPose.x, -localPose.z);
+            showToast('焚き火広場へ移動しました', 'info');
+            playSound('click');
+        }
+
+        function teleportToPlayer(targetId) {
+            const me = state.players[state.myId];
+            if (!me || (!me.isModerator && !me.isGhost && me.alive)) {
+                showToast('瞬間移動は司会・幽霊のみ可能です', 'warn');
+                return;
+            }
+            const target = state.players[targetId];
+            if (!target) return;
+            localPose.x = (target.x || 0) + Math.sin(target.rotY || 0) * 2.5;
+            localPose.z = (target.z || 0) + Math.cos(target.rotY || 0) * 2.5;
+            localPose.y = Math.max(1.2, (target.y || 0) + 1.2);
+            localPose.yaw = target.rotY || 0;
+            showToast(`${target.name} の背後へ瞬間移動しました`, 'info');
+            playSound('click');
+        }
+
+        /********************************************************************
+         * 5. P2P MULTIPLAYER NETWORKING (PeerJS) & URL INVITE SYSTEM
+         ********************************************************************/
+        function checkUrlForRoomInvite() {
+            const params = new URLSearchParams(window.location.search);
+            const invitedRoom = params.get('room');
+            if (invitedRoom) {
+                switchSetupTab('join');
+                document.getElementById('input-room-id').value = invitedRoom;
+                showToast('招待URLを検出しました！名前を入力して参加してください', 'info');
+            }
+        }
+
+        function extractRoomIdFromInput(raw) {
+            const trimmed = (raw || '').trim();
+            if (!trimmed) return '';
+            try {
+                if (trimmed.includes('?room=')) {
+                    const urlObj = new URL(trimmed);
+                    return urlObj.searchParams.get('room') || trimmed;
+                }
+            } catch (e) {
+                const match = trimmed.match(/[?&]room=([^&]+)/);
+                if (match) return match[1];
+            }
+            return trimmed;
+        }
+
+        function switchSetupTab(tab) {
+            const tabHost = document.getElementById('tab-host');
+            const tabJoin = document.getElementById('tab-join');
+            const panelHost = document.getElementById('panel-host');
+            const panelJoin = document.getElementById('panel-join');
+
+            if (tab === 'host') {
+                tabHost.className = 'flex-1 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition bg-amber-600 text-white shadow';
+                tabJoin.className = 'flex-1 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition text-slate-400 hover:text-white';
+                panelHost.classList.remove('hidden');
+                panelJoin.classList.add('hidden');
+            } else {
+                tabJoin.className = 'flex-1 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition bg-sky-600 text-white shadow';
+                tabHost.className = 'flex-1 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition text-slate-400 hover:text-white';
+                panelJoin.classList.remove('hidden');
+                panelHost.classList.add('hidden');
+            }
+        }
+
+        function generateShortRoomCode() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let code = 'mori-';
+            for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+            return code;
+        }
+
+        // HOST: Starts Game as Moderator & Ghost Spectator
+        function startHostGame() {
+            initAudio();
+            const nameInput = document.getElementById('input-player-name').value.trim();
+            state.myName = nameInput || '森の司会者';
+            state.isHost = true;
+
+            const btn = document.getElementById('btn-create-room');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> P2Pルームを生成中...`;
+
+            const customRoomId = generateShortRoomCode();
+            peer = new Peer(customRoomId);
+
+            peer.on('open', (id) => {
+                state.roomId = id;
+                state.myId = id;
+
+                // Register Host strictly as Moderator Ghost
+                state.players[state.myId] = {
+                    id: state.myId,
+                    name: state.myName,
+                    isModerator: true,
+                    isBot: false,
+                    role: 'MODERATOR',
+                    manualRole: 'MODERATOR',
+                    alive: true,
+                    isGhost: true,
+                    x: 0,
+                    y: 3.5,
+                    z: 9,
+                    rotY: 0,
+                    color: 0x818cf8
+                };
+
+                localPose.x = 0;
+                localPose.y = 3.5;
+                localPose.z = 9;
+
+                enterGameHud();
+                updateInviteUrlFields();
+                appendSystemChat(`あなたが「司会（幽霊）」として森を生成しました。招待URLを共有するか、AIボットを追加してゲームを開始できます。`);
+                showDramaticBanner('MODERATOR SPECTATOR', '👻 司会（幽霊観戦）モード', 'あなたは最初から幽霊として森の上空を自由に飛び回り、全プレイヤーの役職と夜の行動を透視できます。');
+            });
+
+            peer.on('connection', (conn) => {
+                setupHostConnection(conn);
+            });
+
+            peer.on('error', (err) => {
+                showToast('P2P通信警告: オフラインまたはローカルモードで稼働します', 'warn');
+                if (!state.roomId) {
+                    state.roomId = customRoomId;
+                    state.myId = customRoomId;
+                    state.players[state.myId] = {
+                        id: state.myId,
+                        name: state.myName,
+                        isModerator: true,
+                        isBot: false,
+                        role: 'MODERATOR',
+                        manualRole: 'MODERATOR',
+                        alive: true,
+                        isGhost: true,
+                        x: 0, y: 3.5, z: 9, rotY: 0, color: 0x818cf8
+                    };
+                    enterGameHud();
+                    updateInviteUrlFields();
+                }
+            });
+        }
+
+        function setupHostConnection(conn) {
+            conn.on('open', () => {
+                clientConns.set(conn.peer, conn);
+            });
+            conn.on('data', (data) => {
+                handleHostReceiveData(conn.peer, data);
+            });
+            conn.on('close', () => {
+                clientConns.delete(conn.peer);
+                if (state.players[conn.peer]) {
+                    const leftName = state.players[conn.peer].name;
+                    delete state.players[conn.peer];
+                    appendSystemChat(`${leftName} が森から退出しました。`);
+                    broadcastGameState();
+                    renderPlayersList();
+                }
+            });
+        }
+
+        // CLIENT: Joins Host's Room via URL or Room ID
+        function joinClientGame() {
+            initAudio();
+            const rawRoom = document.getElementById('input-room-id').value;
+            const targetRoomId = extractRoomIdFromInput(rawRoom);
+            if (!targetRoomId) {
+                showToast('招待URLまたはルームIDを入力してください', 'warn');
+                return;
+            }
+
+            const nameInput = document.getElementById('input-player-name').value.trim();
+            state.myName = nameInput || `旅人${Math.floor(100 + Math.random() * 899)}`;
+            state.isHost = false;
+            state.roomId = targetRoomId;
+
+            const btn = document.getElementById('btn-join-room');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 司会の森へ接続中...`;
+
+            peer = new Peer();
+            peer.on('open', (myPeerId) => {
+                state.myId = myPeerId;
+                hostConn = peer.connect(targetRoomId, { reliable: true });
+
+                hostConn.on('open', () => {
+                    // Spawn around campfire
+                    const angle = Math.random() * Math.PI * 2;
+                    localPose.x = Math.cos(angle) * 5.0;
+                    localPose.y = 0;
+                    localPose.z = Math.sin(angle) * 5.0;
+                    localPose.yaw = Math.atan2(-localPose.x, -localPose.z);
+
+                    hostConn.send({
+                        type: 'JOIN_REQUEST',
+                        name: state.myName,
+                        x: localPose.x,
+                        y: 0,
+                        z: localPose.z,
+                        rotY: localPose.yaw
+                    });
+
+                    enterGameHud();
+                    updateInviteUrlFields();
+                    showToast('薄暗い森へ参加しました！', 'success');
+                });
+
+                hostConn.on('data', (data) => {
+                    handleClientReceiveData(data);
+                });
+
+                hostConn.on('close', () => {
+                    showToast('司会との接続が切断されました', 'warn');
+                });
+            });
+
+            peer.on('error', () => {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-person-walking-arrow-right"></i> 薄暗い森へ足を踏み入れる`;
+                showToast('ルームが見つかりません。ルームIDを確認してください', 'warn');
+            });
+        }
+
+        function updateInviteUrlFields() {
+            const baseUrl = window.location.origin + window.location.pathname;
+            const inviteUrl = `${baseUrl}?room=${encodeURIComponent(state.roomId)}`;
+            document.getElementById('invite-url-display').value = inviteUrl;
+            document.getElementById('room-id-code').textContent = state.roomId;
+        }
+
+        function copyTextFallback(text, successMsg) {
+            const tempInput = document.createElement('textarea');
+            tempInput.value = text;
+            tempInput.style.position = 'fixed';
+            tempInput.style.opacity = '0';
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            try {
+                document.execCommand('copy');
+                showToast(successMsg, 'success');
+            } catch (err) {
+                showToast('コピーに失敗しました。手動で選択してコピーしてください', 'warn');
+            }
+            document.body.removeChild(tempInput);
+        }
+
+        function copyInviteUrl() {
+            const url = document.getElementById('invite-url-display').value;
+            copyTextFallback(url, '招待URLをクリップボードにコピーしました！');
+        }
+
+        function copyRoomIdOnly() {
+            copyTextFallback(state.roomId, `ルームID (${state.roomId}) をコピーしました！`);
+        }
+
+        /********************************************************************
+         * 6. HOST AUTHORITATIVE P2P MESSAGE HANDLERS
+         ********************************************************************/
+        function handleHostReceiveData(peerId, data) {
+            if (!data || !data.type) return;
+
+            if (data.type === 'JOIN_REQUEST') {
+                const colorIdx = Object.keys(state.players).length % AVATAR_COLORS.length;
+                const joinedDuringGame = state.phase !== 'LOBBY';
+                state.players[peerId] = {
+                    id: peerId,
+                    name: data.name || '旅人',
+                    isModerator: false,
+                    isBot: false,
+                    role: 'CITIZEN',
+                    manualRole: 'CITIZEN',
+                    alive: !joinedDuringGame,
+                    isGhost: joinedDuringGame,
+                    x: data.x || 0,
+                    y: data.y || 0,
+                    z: data.z || 5,
+                    rotY: data.rotY || 0,
+                    color: AVATAR_COLORS[colorIdx]
+                };
+                appendSystemChat(`🏮 ${state.players[peerId].name} が森へやって来ました。`);
+                recalculateCitizenCount();
+                broadcastGameState();
+                renderPlayersList();
+            } else if (data.type === 'POSE_UPDATE') {
+                const p = state.players[peerId];
+                if (p) {
+                    p.x = data.x;
+                    p.y = data.y;
+                    p.z = data.z;
+                    p.rotY = data.rotY;
+                }
+            } else if (data.type === 'CHAT_MSG') {
+                const sender = state.players[peerId];
+                if (sender) {
+                    processIncomingChat(sender, data.text);
+                }
+            } else if (data.type === 'PLAYER_ACTION') {
+                processPlayerGameAction(peerId, data.actionType, data.targetId);
+            }
+        }
+
+        function broadcastPacket(packet) {
+            for (const conn of clientConns.values()) {
+                if (conn.open) conn.send(packet);
+            }
+        }
+
+        function broadcastGameState() {
+            if (!state.isHost) return;
+            const packet = {
+                type: 'STATE_SYNC',
+                phase: state.phase,
+                dayCount: state.dayCount,
+                timerSeconds: state.timerSeconds,
+                roleAssignMode: state.roleAssignMode,
+                roleCounts: state.roleCounts,
+                players: state.players,
+                seerResults: state.seerResults
+            };
+            broadcastPacket(packet);
+            updateHudStatus();
+        }
+
+        function handleClientReceiveData(data) {
+            if (!data || !data.type) return;
+
+            if (data.type === 'STATE_SYNC') {
+                const prevPhase = state.phase;
+                state.phase = data.phase;
+                state.dayCount = data.dayCount;
+                state.timerSeconds = data.timerSeconds;
+                state.roleAssignMode = data.roleAssignMode;
+                state.roleCounts = data.roleCounts;
+                state.seerResults = data.seerResults || {};
+
+                // Merge players while preserving own smooth local position
+                Object.keys(data.players).forEach(id => {
+                    if (id === state.myId && state.players[id]) {
+                        const incoming = data.players[id];
+                        state.players[id].role = incoming.role;
+                        state.players[id].alive = incoming.alive;
+                        state.players[id].isGhost = incoming.isGhost;
+                        state.players[id].isModerator = incoming.isModerator;
+                    } else {
+                        state.players[id] = data.players[id];
+                    }
+                });
+                // Remove disconnected
+                Object.keys(state.players).forEach(id => {
+                    if (!data.players[id]) delete state.players[id];
+                });
+
+                if (prevPhase !== state.phase) {
+                    onClientPhaseChanged(state.phase);
+                }
+                updateHudStatus();
+                renderPlayersList();
+            } else if (data.type === 'POSE_SNAPSHOT') {
+                Object.keys(data.poses).forEach(id => {
+                    if (id !== state.myId && state.players[id]) {
+                        const pose = data.poses[id];
+                        state.players[id].x = pose.x;
+                        state.players[id].y = pose.y;
+                        state.players[id].z = pose.z;
+                        state.players[id].rotY = pose.rotY;
+                    }
+                });
+            } else if (data.type === 'CHAT_BROADCAST') {
+                receiveFormattedChat(data.chat);
+            } else if (data.type === 'BANNER_EVENT') {
+                showDramaticBanner(data.subtitle, data.title, data.desc);
+                if (data.sound) playSound(data.sound);
+            } else if (data.type === 'VICTORY_EVENT') {
+                showVictoryScreen(data.winnerTeam, data.title, data.desc);
+            }
+        }
+
+        /********************************************************************
+         * 7. AI BOTS & ROLE ASSIGNMENT MODES (RANDOM VS MANUAL)
+         ********************************************************************/
+        const BOT_NAMES = ['アカネ', 'レン', 'ミオ', 'ソウタ', 'ヒナタ', 'クロエ', 'シオン', 'カエデ', 'ユヅキ'];
+
+        function addAiBot() {
+            if (!state.isHost) return;
+            if (state.phase !== 'LOBBY') {
+                showToast('AIボットの追加はロビー待機中のみ可能です', 'warn');
+                return;
+            }
+            const existingNames = Object.values(state.players).map(p => p.name);
+            const available = BOT_NAMES.filter(n => !existingNames.includes(n));
+            const botName = available.length > 0 ? available[0] : `森の住人${Object.keys(state.players).length}`;
+            const botId = 'bot-' + Math.random().toString(36).substring(2, 8);
+
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 4.2 + Math.random() * 2.0;
+            const colorIdx = Object.keys(state.players).length % AVATAR_COLORS.length;
+
+            state.players[botId] = {
+                id: botId,
+                name: botName + ' (AI)',
+                isModerator: false,
+                isBot: true,
+                role: 'CITIZEN',
+                manualRole: 'CITIZEN',
+                alive: true,
+                isGhost: false,
+                x: Math.cos(angle) * radius,
+                y: 0,
+                z: Math.sin(angle) * radius,
+                rotY: Math.atan2(-Math.cos(angle), -Math.sin(angle)),
+                color: AVATAR_COLORS[colorIdx],
+                aiTargetX: Math.cos(angle) * radius,
+                aiTargetZ: Math.sin(angle) * radius
+            };
+
+            playSound('click');
+            recalculateCitizenCount();
+            renderPlayersList();
+            broadcastGameState();
+        }
+
+        function removeBotPlayer(botId) {
+            if (!state.isHost || state.phase !== 'LOBBY') return;
+            if (state.players[botId] && state.players[botId].isBot) {
+                delete state.players[botId];
+                recalculateCitizenCount();
+                renderPlayersList();
+                broadcastGameState();
+            }
+        }
+
+        function setRoleAssignMode(mode) {
+            if (!state.isHost) return;
+            state.roleAssignMode = mode;
+            playSound('click');
+
+            const btnRand = document.getElementById('btn-mode-random');
+            const btnMan = document.getElementById('btn-mode-manual');
+            const randPanel = document.getElementById('random-counts-panel');
+            const manHint = document.getElementById('manual-mode-hint');
+
+            if (mode === 'random') {
+                btnRand.className = 'py-1.5 rounded-md text-[11px] font-bold bg-amber-600 text-white transition';
+                btnMan.className = 'py-1.5 rounded-md text-[11px] font-bold text-slate-400 hover:text-white transition';
+                randPanel.classList.remove('hidden');
+                manHint.classList.add('hidden');
+            } else {
+                btnMan.className = 'py-1.5 rounded-md text-[11px] font-bold bg-amber-600 text-white transition';
+                btnRand.className = 'py-1.5 rounded-md text-[11px] font-bold text-slate-400 hover:text-white transition';
+                randPanel.classList.add('hidden');
+                manHint.classList.remove('hidden');
+            }
+            renderPlayersList();
+            broadcastGameState();
+        }
+
+        function adjustRoleCount(roleKey, delta) {
+            if (!state.isHost) return;
+            const participants = getNonModeratorPlayers();
+            const totalPlayers = participants.length;
+            const nextVal = Math.max(0, (state.roleCounts[roleKey] || 0) + delta);
+            if (roleKey === 'TAKANERO' && nextVal < 1) return;
+
+            state.roleCounts[roleKey] = nextVal;
+            recalculateCitizenCount();
+            broadcastGameState();
+        }
+
+        function recalculateCitizenCount() {
+            const total = getNonModeratorPlayers().length;
+            const specialSum = state.roleCounts.TAKANERO + state.roleCounts.KNIGHT + state.roleCounts.SEER;
+            state.roleCounts.CITIZEN = Math.max(0, total - specialSum);
+
+            document.getElementById('count-TAKANERO').textContent = state.roleCounts.TAKANERO;
+            document.getElementById('count-KNIGHT').textContent = state.roleCounts.KNIGHT;
+            document.getElementById('count-SEER').textContent = state.roleCounts.SEER;
+            document.getElementById('count-CITIZEN').textContent = state.roleCounts.CITIZEN;
+        }
+
+        function setPlayerManualRole(playerId, roleId) {
+            if (!state.isHost) return;
+            if (state.players[playerId] && !state.players[playerId].isModerator) {
+                state.players[playerId].manualRole = roleId;
+                state.players[playerId].role = roleId;
+                renderPlayersList();
+                broadcastGameState();
+            }
+        }
+
+        function getNonModeratorPlayers() {
+            return Object.values(state.players).filter(p => !p.isModerator);
+        }
+
+        /********************************************************************
+         * 8. GAME PHASE ENGINE (MODERATOR CONTROLLED + AUTO TIMERS)
+         ********************************************************************/
+        function moderatorStartGame() {
+            if (!state.isHost) return;
+            const participants = getNonModeratorPlayers();
+            if (participants.length < 3) {
+                showToast('ゲーム開始には最低3名の参加者が必要です（「AIボット追加」ボタンで補充できます）', 'warn');
+                return;
+            }
+
+            // Assign roles based on mode
+            if (state.roleAssignMode === 'random') {
+                const deck = [];
+                for (let i = 0; i < state.roleCounts.TAKANERO; i++) deck.push('TAKANERO');
+                for (let i = 0; i < state.roleCounts.KNIGHT; i++) deck.push('KNIGHT');
+                for (let i = 0; i < state.roleCounts.SEER; i++) deck.push('SEER');
+                while (deck.length < participants.length) deck.push('CITIZEN');
+
+                // Shuffle deck
+                for (let i = deck.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [deck[i], deck[j]] = [deck[j], deck[i]];
+                }
+
+                participants.forEach((p, idx) => {
+                    p.role = deck[idx] || 'CITIZEN';
+                    p.alive = true;
+                    p.isGhost = false;
+                });
+            } else {
+                // Manual Mode: Validate at least 1 Takaneko
+                const hasTakaneko = participants.some(p => p.manualRole === 'TAKANERO');
+                if (!hasTakaneko) {
+                    showToast('司会指名モード：最低1人は「たかねこ（人狼）」に設定してください', 'warn');
+                    return;
+                }
+                participants.forEach(p => {
+                    p.role = p.manualRole || 'CITIZEN';
+                    p.alive = true;
+                    p.isGhost = false;
+                });
+            }
+
+            state.dayCount = 1;
+            state.seerResults = {};
+            transitionToPhase('ROLE_REVEAL');
+        }
+
+        function transitionToPhase(nextPhaseId) {
+            if (!state.isHost) return;
+            state.phase = nextPhaseId;
+            const pInfo = PHASES[nextPhaseId];
+            state.timerSeconds = pInfo ? pInfo.duration : 0;
+            state.mySelectedTarget = null;
+
+            if (nextPhaseId === 'ROLE_REVEAL') {
+                document.getElementById('mod-role-config-box').classList.add('hidden');
+                document.getElementById('btn-mod-start').classList.add('hidden');
+                document.getElementById('btn-mod-next-phase').classList.remove('hidden');
+
+                triggerBannerAll('ROLE REVEAL', '📜 役職が決定しました', '自分の役職を確認し、薄暗い森で生き残る準備をしてください。', 'bell');
+                appendSystemChat('=== ゲームが開始されました！各自の役職を確認してください ===');
+            } else if (nextPhaseId === 'DAY_DISCUSSION') {
+                // Gather bots near campfire
+                getNonModeratorPlayers().forEach((p, idx) => {
+                    if (p.isBot && p.alive) {
+                        const angle = (idx / 6) * Math.PI * 2;
+                        p.aiTargetX = Math.cos(angle) * 4.5;
+                        p.aiTargetZ = Math.sin(angle) * 4.5;
+                    }
+                });
+                triggerBannerAll(`DAY ${state.dayCount}`, `🔥 ${state.dayCount}日目の昼：探索と議論`, '焚き火の周りで情報を共有し、森に潜む「たかねこ（人狼）」を探り当てましょう。', 'dawn');
+            } else if (nextPhaseId === 'VOTING') {
+                state.votes = {};
+                triggerBannerAll('VOTING TIME', '⚖️ 夕暮れの処刑投票', '最も怪しいと思う人物に1票を投じてください。最多得票者が森から追放されます。', 'bell');
+                scheduleBotVotes();
+            } else if (nextPhaseId === 'NIGHT') {
+                state.nightActions = { takanekoTarget: null, knightTarget: null, seerTargets: {} };
+                triggerBannerAll(`NIGHT ${state.dayCount}`, '🌙 薄暗い森の夜・能力行使', 'たかねこは獲物を襲い、騎士は誰かを守り、占い師は真実を覗き見ます…', 'night');
+                scheduleBotNightActions();
+                updateModeratorMonitor();
+            } else if (nextPhaseId === 'DAWN') {
+                resolveNightOutcome();
+            }
+
+            onClientPhaseChanged(nextPhaseId);
+            renderPlayersList();
+            broadcastGameState();
+        }
+
+        function moderatorNextPhase() {
+            if (!state.isHost) return;
+            playSound('click');
+            if (state.phase === 'ROLE_REVEAL') {
+                transitionToPhase('DAY_DISCUSSION');
+            } else if (state.phase === 'DAY_DISCUSSION') {
+                transitionToPhase('VOTING');
+            } else if (state.phase === 'VOTING') {
+                resolveVotingOutcome();
+            } else if (state.phase === 'NIGHT') {
+                transitionToPhase('DAWN');
+            } else if (state.phase === 'DAWN') {
+                if (!checkWinCondition()) {
+                    state.dayCount++;
+                    transitionToPhase('DAY_DISCUSSION');
+                }
+            }
+        }
+
+        function processPlayerGameAction(actorId, actionType, targetId) {
+            if (!state.isHost) return;
+            const actor = state.players[actorId];
+            const target = state.players[targetId];
+            if (!actor || !actor.alive || !target || !target.alive) return;
+
+            if (actionType === 'VOTE' && state.phase === 'VOTING') {
+                state.votes[actorId] = targetId;
+                updateModeratorMonitor();
+                // Check if all living players have voted
+                const living = getNonModeratorPlayers().filter(p => p.alive);
+                if (Object.keys(state.votes).length >= living.length) {
+                    resolveVotingOutcome();
+                }
+            } else if (state.phase === 'NIGHT') {
+                if (actionType === 'TAKANERO_ATTACK' && actor.role === 'TAKANERO') {
+                    state.nightActions.takanekoTarget = targetId;
+                } else if (actionType === 'KNIGHT_GUARD' && actor.role === 'KNIGHT') {
+                    state.nightActions.knightTarget = targetId;
+                } else if (actionType === 'SEER_DIVINE' && actor.role === 'SEER') {
+                    state.nightActions.seerTargets[actorId] = targetId;
+                    const isWolf = target.role === 'TAKANERO';
+                    if (!state.seerResults[actorId]) state.seerResults[actorId] = [];
+                    // Avoid duplicate in same night
+                    state.seerResults[actorId] = state.seerResults[actorId].filter(r => r.day !== state.dayCount);
+                    state.seerResults[actorId].push({
+                        day: state.dayCount,
+                        targetName: target.name,
+                        isTakaneko: isWolf
+                    });
+                    broadcastGameState();
+                }
+                updateModeratorMonitor();
+            }
+        }
+
+        function resolveVotingOutcome() {
+            if (!state.isHost) return;
+            const tally = {};
+            Object.values(state.votes).forEach(tid => {
+                tally[tid] = (tally[tid] || 0) + 1;
+            });
+
+            let maxVotes = 0;
+            let executedId = null;
+            Object.entries(tally).forEach(([tid, count]) => {
+                if (count > maxVotes) {
+                    maxVotes = count;
+                    executedId = tid;
+                }
+            });
+
+            if (executedId && state.players[executedId]) {
+                const victim = state.players[executedId];
+                victim.alive = false;
+                victim.isGhost = true;
+                appendSystemChat(`⚖️ 投票の結果、${victim.name}（${maxVotes}票）が処刑され、幽霊となりました。`);
+                triggerBannerAll('EXECUTION', `⚖️ ${victim.name} が追放されました`, '残された者たちに、恐ろしい森の夜が近づいてきます…', 'bell');
+            } else {
+                appendSystemChat(`⚖️ 投票が割れ、本日は誰も追放されませんでした。`);
+            }
+
+            broadcastGameState();
+            renderPlayersList();
+
+            if (!checkWinCondition()) {
+                setTimeout(() => {
+                    if (state.phase === 'VOTING') transitionToPhase('NIGHT');
+                }, 3800);
+            }
+        }
+
+        function resolveNightOutcome() {
+            if (!state.isHost) return;
+            const attackedId = state.nightActions.takanekoTarget;
+            const guardedId = state.nightActions.knightTarget;
+
+            if (attackedId && attackedId === guardedId) {
+                const guardedPlayer = state.players[guardedId];
+                appendSystemChat(`🛡️ 昨晩、騎士の護衛によりたかねこの襲撃は阻止されました！犠牲者はいません！`);
+                triggerBannerAll('KNIGHT GUARDED', '🛡️ 騎士が襲撃を阻止しました！', '昨晩は誰一人として命を落とさずに朝を迎えました。', 'dawn');
+            } else if (attackedId && state.players[attackedId]) {
+                const victim = state.players[attackedId];
+                victim.alive = false;
+                victim.isGhost = true;
+                appendSystemChat(`🐾 昨晩、${victim.name} がたかねこに襲撃され、幽霊となりました…`);
+                triggerBannerAll('NIGHT VICTIM', `🐾 ${victim.name} が無残な姿で発見されました`, '薄暗い森にたかねこの遠吠えが響き渡りました…', 'night');
+            } else {
+                appendSystemChat(`🌅 静かな朝が訪れました。昨晩の犠牲者はいませんでした。`);
+                triggerBannerAll('PEACEFUL DAWN', '🌅 静かな朝が訪れました', '昨晩の犠牲者はいませんでした。', 'dawn');
+            }
+
+            broadcastGameState();
+            renderPlayersList();
+            checkWinCondition();
+        }
+
+        function checkWinCondition() {
+            if (!state.isHost) return false;
+            const living = getNonModeratorPlayers().filter(p => p.alive);
+            const livingWolves = living.filter(p => p.role === 'TAKANERO').length;
+            const livingHumans = living.length - livingWolves;
+
+            if (livingWolves === 0) {
+                state.phase = 'GAME_OVER';
+                const title = '森に平和な朝が戻りました！';
+                const desc = 'すべての「たかねこ（人狼）」を追放し、市民陣営が勝利を収めました！';
+                broadcastGameState();
+                broadcastPacket({ type: 'VICTORY_EVENT', winnerTeam: 'HUMAN', title, desc });
+                showVictoryScreen('HUMAN', title, desc);
+                return true;
+            }
+            if (livingWolves >= livingHumans) {
+                state.phase = 'GAME_OVER';
+                const title = '薄暗い森はたかねこに支配された…';
+                const desc = 'たかねこ（人狼）の数が人間と同数以上となり、たかねこ陣営が勝利しました！';
+                broadcastGameState();
+                broadcastPacket({ type: 'VICTORY_EVENT', winnerTeam: 'WEREWOLF', title, desc });
+                showVictoryScreen('WEREWOLF', title, desc);
+                return true;
+            }
+            return false;
+        }
+
+        function moderatorResetToLobby() {
+            if (!state.isHost) return;
+            document.getElementById('victory-modal').classList.add('hidden');
+            state.phase = 'LOBBY';
+            state.dayCount = 1;
+            state.timerSeconds = 0;
+
+            getNonModeratorPlayers().forEach(p => {
+                p.alive = true;
+                p.isGhost = false;
+            });
+
+            document.getElementById('mod-role-config-box').classList.remove('hidden');
+            document.getElementById('btn-mod-start').classList.remove('hidden');
+            document.getElementById('btn-mod-next-phase').classList.add('hidden');
+            document.getElementById('mod-night-monitor').classList.add('hidden');
+
+            recalculateCitizenCount();
+            renderPlayersList();
+            onClientPhaseChanged('LOBBY');
+            broadcastGameState();
+            appendSystemChat('=== 司会がゲームをロビー待機状態へリセットしました ===');
+        }
+
+        /********************************************************************
+         * 9. AI BOT AUTONOMOUS BEHAVIOR (3D WANDERING, VOTING & NIGHT ROLES)
+         ********************************************************************/
+        function updateAiBotsIn3D(dt) {
+            if (!state.isHost) return;
+            Object.values(state.players).forEach(bot => {
+                if (!bot.isBot) return;
+                if (!bot.alive) {
+                    bot.y = 2.8;
+                } else {
+                    bot.y = 0;
+                }
+
+                // Periodically pick a new target in the forest
+                if (Math.random() < 0.012) {
+                    if (state.phase === 'DAY_DISCUSSION' || state.phase === 'VOTING') {
+                        // Stay closer to campfire during discussion
+                        const angle = Math.random() * Math.PI * 2;
+                        const r = 3.5 + Math.random() * 5.0;
+                        bot.aiTargetX = Math.cos(angle) * r;
+                        bot.aiTargetZ = Math.sin(angle) * r;
+                    } else {
+                        // Wander deeper into the dark forest at night
+                        const angle = Math.random() * Math.PI * 2;
+                        const r = 6.0 + Math.random() * 24.0;
+                        bot.aiTargetX = Math.cos(angle) * r;
+                        bot.aiTargetZ = Math.sin(angle) * r;
+                    }
+                }
+
+                const dx = (bot.aiTargetX || 0) - bot.x;
+                const dz = (bot.aiTargetZ || 0) - bot.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist > 0.4) {
+                    const moveSpeed = 3.4;
+                    bot.x += (dx / dist) * moveSpeed * dt;
+                    bot.z += (dz / dist) * moveSpeed * dt;
+                    bot.rotY = Math.atan2(-dx, -dz);
+                } else {
+                    // Face campfire if near center
+                    bot.rotY = Math.atan2(-bot.x, -bot.z);
+                }
+            });
+        }
+
+        function scheduleBotVotes() {
+            if (!state.isHost) return;
+            const living = getNonModeratorPlayers().filter(p => p.alive);
+            living.filter(p => p.isBot).forEach((bot, idx) => {
+                setTimeout(() => {
+                    if (state.phase !== 'VOTING' || !bot.alive) return;
+                    const candidates = living.filter(c => c.id !== bot.id && !(bot.role === 'TAKANERO' && c.role === 'TAKANERO'));
+                    if (candidates.length > 0) {
+                        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+                        processPlayerGameAction(bot.id, 'VOTE', pick.id);
+                    }
+                }, 1500 + idx * 900);
+            });
+        }
+
+        function scheduleBotNightActions() {
+            if (!state.isHost) return;
+            const living = getNonModeratorPlayers().filter(p => p.alive);
+            living.filter(p => p.isBot).forEach((bot, idx) => {
+                setTimeout(() => {
+                    if (state.phase !== 'NIGHT' || !bot.alive) return;
+                    if (bot.role === 'TAKANERO' && !state.nightActions.takanekoTarget) {
+                        const humans = living.filter(c => c.role !== 'TAKANERO');
+                        if (humans.length > 0) {
+                            const pick = humans[Math.floor(Math.random() * humans.length)];
+                            processPlayerGameAction(bot.id, 'TAKANERO_ATTACK', pick.id);
+                        }
+                    } else if (bot.role === 'KNIGHT' && !state.nightActions.knightTarget) {
+                        const others = living.filter(c => c.id !== bot.id);
+                        if (others.length > 0) {
+                            const pick = others[Math.floor(Math.random() * others.length)];
+                            processPlayerGameAction(bot.id, 'KNIGHT_GUARD', pick.id);
+                        }
+                    } else if (bot.role === 'SEER') {
+                        const others = living.filter(c => c.id !== bot.id);
+                        if (others.length > 0) {
+                            const pick = others[Math.floor(Math.random() * others.length)];
+                            processPlayerGameAction(bot.id, 'SEER_DIVINE', pick.id);
+                        }
+                    }
+                }, 1800 + idx * 800);
+            });
+        }
+
+        /********************************************************************
+         * 10. UI RENDERING, ACTION PANELS & CHAT SYSTEM
+         ********************************************************************/
+        function enterGameHud() {
+            document.getElementById('setup-modal').classList.add('hidden');
+            document.getElementById('game-hud').classList.remove('hidden');
+
+            if (state.isHost) {
+                document.getElementById('moderator-controls').classList.remove('hidden');
+            }
+            applyControlModeUI();
+            recalculateCitizenCount();
+            renderPlayersList();
+            updateHudStatus();
+        }
+
+        function toggleSidePanel() {
+            const drawer = document.getElementById('side-drawer');
+            drawer.classList.toggle('hidden');
+            playSound('click');
+        }
+
+        function updateHudStatus() {
+            const pInfo = PHASES[state.phase] || PHASES.LOBBY;
+            document.getElementById('hud-phase-icon').textContent = pInfo.icon;
+            document.getElementById('hud-day-badge').textContent = state.phase === 'LOBBY' ? 'ロビー待機中' : `${state.dayCount}日目・${pInfo.badge}`;
+            document.getElementById('hud-phase-title').textContent = pInfo.name;
+
+            const timerEl = document.getElementById('hud-timer');
+            if (state.timerSeconds > 0) {
+                timerEl.classList.remove('hidden');
+                const m = String(Math.floor(state.timerSeconds / 60)).padStart(2, '0');
+                const s = String(state.timerSeconds % 60).padStart(2, '0');
+                timerEl.textContent = `${m}:${s}`;
+            } else {
+                timerEl.classList.add('hidden');
+            }
+
+            const me = state.players[state.myId];
+            if (me) {
+                const rInfo = ROLES[me.role] || ROLES.CITIZEN;
+                const ghostSuffix = (!me.alive && !me.isModerator) ? ' (幽霊観戦)' : '';
+                const roleEl = document.getElementById('hud-my-role');
+                roleEl.innerHTML = `<span>${rInfo.emoji}</span> <span style="color:${rInfo.color}">${rInfo.name}${ghostSuffix}</span>`;
+
+                // Show Ghost Flight Bar if Moderator or Dead Ghost
+                const ghostFlightEl = document.getElementById('ghost-flight-controls');
+                const ghostChatBadge = document.getElementById('ghost-chat-badge');
+                if (me.isModerator || me.isGhost || !me.alive) {
+                    ghostFlightEl.classList.remove('hidden');
+                    ghostChatBadge.classList.remove('hidden');
+                    if (localPose.y < 0.5) localPose.y = 2.5;
+                } else {
+                    ghostFlightEl.classList.add('hidden');
+                    ghostChatBadge.classList.add('hidden');
+                }
+            }
+
+            // Adjust forest lighting for Night vs Day/Campfire
+            if (scene && ambientLight) {
+                if (state.phase === 'NIGHT') {
+                    scene.fog.density = 0.046;
+                    ambientLight.intensity = 0.28;
+                } else {
+                    scene.fog.density = 0.028;
+                    ambientLight.intensity = 0.65;
+                }
+            }
+        }
+
+        function onClientPhaseChanged(newPhase) {
+            state.mySelectedTarget = null;
+            renderActionCard();
+            if (state.isHost) {
+                const monitor = document.getElementById('mod-night-monitor');
+                if (newPhase === 'NIGHT' || newPhase === 'VOTING') {
+                    monitor.classList.remove('hidden');
+                    updateModeratorMonitor();
+                } else {
+                    monitor.classList.add('hidden');
+                }
+            }
+        }
+
+        function renderActionCard() {
+            const container = document.getElementById('action-card-container');
+            const titleEl = document.getElementById('action-card-title');
+            const badgeEl = document.getElementById('action-card-badge');
+            const descEl = document.getElementById('action-card-desc');
+            const listEl = document.getElementById('action-targets-list');
+
+            const me = state.players[state.myId];
+            if (!me) {
+                container.classList.add('hidden');
+                return;
+            }
+
+            // Show Seer Results if player is Seer
+            const mySeerLogs = state.seerResults[state.myId] || [];
+            let seerHistoryHtml = '';
+            if (me.role === 'SEER' && mySeerLogs.length > 0) {
+                seerHistoryHtml = `<div class="mb-2 p-2 rounded-lg bg-purple-950/60 border border-purple-500/30 text-[11px] space-y-1">
+                    <div class="font-bold text-purple-300">🔮 これまでの占い結果:</div>
+                    ${mySeerLogs.map(r => `<div>・${r.day}日目: <b>${escapeHtml(r.targetName)}</b> は <span class="${r.isTakaneko ? 'text-red-400 font-bold' : 'text-emerald-300 font-bold'}">${r.isTakaneko ? '🐾たかねこ（人狼）' : '🏮人間'}</span></div>`).join('')}
+                </div>`;
+            }
+
+            // Role Reveal Phase Card
+            if (state.phase === 'ROLE_REVEAL') {
+                const rInfo = ROLES[me.role] || ROLES.CITIZEN;
+                container.classList.remove('hidden');
+                titleEl.innerHTML = `${rInfo.emoji} あなたの役職：${rInfo.name}`;
+                badgeEl.textContent = '確認中';
+                descEl.textContent = rInfo.desc;
+
+                // If Takaneko, show fellow Takaneko
+                let extraHtml = '';
+                if (me.role === 'TAKANERO') {
+                    const fellows = getNonModeratorPlayers().filter(p => p.role === 'TAKANERO' && p.id !== me.id);
+                    extraHtml = `<div class="p-2 rounded-lg bg-red-950/50 border border-red-500/30 text-xs text-red-200">
+                        🐾 仲間のたかねこ: ${fellows.length > 0 ? fellows.map(f => escapeHtml(f.name)).join(', ') : 'あなた1人だけです'}
+                    </div>`;
+                }
+                listEl.innerHTML = extraHtml;
+                return;
+            }
+
+            // Moderator or Dead Ghost doesn't vote/act
+            if (me.isModerator || !me.alive) {
+                container.classList.add('hidden');
+                return;
+            }
+
+            const livingTargets = getNonModeratorPlayers().filter(p => p.alive && p.id !== me.id);
+
+            if (state.phase === 'VOTING') {
+                container.classList.remove('hidden');
+                titleEl.innerHTML = `⚖️ 処刑投票`;
+                badgeEl.textContent = state.mySelectedTarget ? '投票済' : '未投票';
+                descEl.textContent = '追放したいプレイヤーを1人選んで投票してください。';
+                listEl.innerHTML = seerHistoryHtml + livingTargets.map(t => {
+                    const selected = state.mySelectedTarget === t.id;
+                    return `<button onclick="submitPlayerAction('VOTE', '${t.id}')"
+                        class="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold border transition ${selected ? 'bg-amber-600 text-white border-amber-400' : 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border-slate-700'}">
+                        <span>${escapeHtml(t.name)}</span>
+                        <span>${selected ? '✓ 投票中' : '投票する'}</span>
+                    </button>`;
+                }).join('');
+            } else if (state.phase === 'NIGHT') {
+                container.classList.remove('hidden');
+                if (me.role === 'TAKANERO') {
+                    const humanTargets = livingTargets.filter(t => t.role !== 'TAKANERO');
+                    titleEl.innerHTML = `🐾 たかねこの襲撃`;
+                    badgeEl.textContent = state.mySelectedTarget ? '標的決定' : '未選択';
+                    descEl.textContent = '今晩襲撃する人間を1人選んでください。';
+                    listEl.innerHTML = humanTargets.map(t => {
+                        const selected = state.mySelectedTarget === t.id;
+                        return `<button onclick="submitPlayerAction('TAKANERO_ATTACK', '${t.id}')"
+                            class="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold border transition ${selected ? 'bg-red-600 text-white border-red-400' : 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border-slate-700'}">
+                            <span>${escapeHtml(t.name)}</span>
+                            <span>${selected ? '🐾 襲撃対象' : '襲撃する'}</span>
+                        </button>`;
+                    }).join('');
+                } else if (me.role === 'KNIGHT') {
+                    titleEl.innerHTML = `🛡️ 騎士の護衛`;
+                    badgeEl.textContent = state.mySelectedTarget ? '護衛中' : '未選択';
+                    descEl.textContent = 'たかねこの襲撃から守る人物を1人選んでください。';
+                    listEl.innerHTML = livingTargets.map(t => {
+                        const selected = state.mySelectedTarget === t.id;
+                        return `<button onclick="submitPlayerAction('KNIGHT_GUARD', '${t.id}')"
+                            class="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold border transition ${selected ? 'bg-sky-600 text-white border-sky-400' : 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border-slate-700'}">
+                            <span>${escapeHtml(t.name)}</span>
+                            <span>${selected ? '🛡️ 護衛対象' : '護衛する'}</span>
+                        </button>`;
+                    }).join('');
+                } else if (me.role === 'SEER') {
+                    titleEl.innerHTML = `🔮 占い師の透視`;
+                    badgeEl.textContent = state.mySelectedTarget ? '占い済' : '未選択';
+                    descEl.textContent = '今晩正体を占う人物を1人選んでください（即座に結果が判明します）。';
+                    listEl.innerHTML = seerHistoryHtml + livingTargets.map(t => {
+                        const selected = state.mySelectedTarget === t.id;
+                        const disabled = !!state.mySelectedTarget;
+                        return `<button ${disabled ? 'disabled' : ''} onclick="submitPlayerAction('SEER_DIVINE', '${t.id}')"
+                            class="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold border transition ${selected ? 'bg-purple-600 text-white border-purple-400' : 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border-slate-700'}">
+                            <span>${escapeHtml(t.name)}</span>
+                            <span>${selected ? '🔮 占い完了' : '占う'}</span>
+                        </button>`;
+                    }).join('');
+                } else {
+                    titleEl.innerHTML = `🏮 市民の夜`;
+                    badgeEl.textContent = '警戒中';
+                    descEl.textContent = '薄暗い森を歩き回りながら、怪しい動きをしている人物がいないか周囲を観察しましょう。';
+                    listEl.innerHTML = '';
+                }
+            } else {
+                if (me.role === 'SEER' && mySeerLogs.length > 0) {
+                    container.classList.remove('hidden');
+                    titleEl.innerHTML = `🔮 占い師の手帳`;
+                    badgeEl.textContent = `${mySeerLogs.length}件`;
+                    descEl.textContent = 'これまでに占った人物の記録です。';
+                    listEl.innerHTML = seerHistoryHtml;
+                } else {
+                    container.classList.add('hidden');
+                }
+            }
+        }
+
+        function submitPlayerAction(actionType, targetId) {
+            state.mySelectedTarget = targetId;
+            playSound('click');
+            renderActionCard();
+
+            if (state.isHost) {
+                processPlayerGameAction(state.myId, actionType, targetId);
+            } else if (hostConn && hostConn.open) {
+                hostConn.send({
+                    type: 'PLAYER_ACTION',
+                    actionType,
+                    targetId
+                });
+            }
+        }
+
+        function updateModeratorMonitor() {
+            if (!state.isHost) return;
+            const contentEl = document.getElementById('mod-monitor-content');
+            if (!contentEl) return;
+
+            if (state.phase === 'VOTING') {
+                const entries = Object.entries(state.votes);
+                if (entries.length === 0) {
+                    contentEl.innerHTML = 'まだ誰も投票していません...';
+                } else {
+                    contentEl.innerHTML = entries.map(([vid, tid]) => {
+                        const vName = state.players[vid]?.name || '?';
+                        const tName = state.players[tid]?.name || '?';
+                        return `<div>・${escapeHtml(vName)} ➔ <b>${escapeHtml(tName)}</b></div>`;
+                    }).join('');
+                }
+            } else if (state.phase === 'NIGHT') {
+                const wolfTarget = state.players[state.nightActions.takanekoTarget]?.name || '未選択';
+                const knightTarget = state.players[state.nightActions.knightTarget]?.name || '未選択';
+                const seerLines = Object.entries(state.nightActions.seerTargets).map(([sid, tid]) => {
+                    return `${escapeHtml(state.players[sid]?.name || '占い師')} ➔ ${escapeHtml(state.players[tid]?.name || '?')}`;
+                }).join(', ') || '未選択';
+
+                contentEl.innerHTML = `
+                    <div>🐾 たかねこ襲撃先: <b class="text-red-400">${escapeHtml(wolfTarget)}</b></div>
+                    <div>🛡️ 騎士の護衛先: <b class="text-sky-400">${escapeHtml(knightTarget)}</b></div>
+                    <div>🔮 占い師の透視先: <b class="text-purple-300">${seerLines}</b></div>
+                `;
+            }
+        }
+
+        function renderPlayersList() {
+            const container = document.getElementById('players-list-container');
+            const participants = getNonModeratorPlayers();
+            document.getElementById('player-count-num').textContent = participants.length;
+
+            const me = state.players[state.myId];
+            const canSeeAllRoles = me && (me.isModerator || me.isGhost || !me.alive || state.phase === 'GAME_OVER');
+
+            const allPlayersSorted = Object.values(state.players).sort((a, b) => (b.isModerator ? 1 : 0) - (a.isModerator ? 1 : 0));
+
+            container.innerHTML = allPlayersSorted.map(p => {
+                const rInfo = ROLES[p.role] || ROLES.CITIZEN;
+                const showManualSelector = state.isHost && state.phase === 'LOBBY' && state.roleAssignMode === 'manual' && !p.isModerator;
+
+                let roleTag = '';
+                if (p.isModerator) {
+                    roleTag = `<span class="text-[10px] px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-500/40 font-bold">👻 司会・観戦</span>`;
+                } else if (showManualSelector) {
+                    roleTag = `
+                        <select onchange="setPlayerManualRole('${p.id}', this.value)"
+                            class="bg-slate-950 border border-amber-500/50 rounded-lg px-2 py-1 text-[11px] font-bold text-amber-300 focus:outline-none">
+                            <option value="TAKANERO" ${p.manualRole === 'TAKANERO' ? 'selected' : ''}>🐾 たかねこ</option>
+                            <option value="KNIGHT" ${p.manualRole === 'KNIGHT' ? 'selected' : ''}>🛡️ 騎士</option>
+                            <option value="SEER" ${p.manualRole === 'SEER' ? 'selected' : ''}>🔮 占い師</option>
+                            <option value="CITIZEN" ${p.manualRole === 'CITIZEN' ? 'selected' : ''}>🏮 市民</option>
+                        </select>
+                    `;
+                } else if (canSeeAllRoles || p.id === state.myId || (me && me.role === 'TAKANERO' && p.role === 'TAKANERO')) {
+                    roleTag = `<span class="text-[10px] px-2 py-0.5 rounded bg-slate-950 border border-slate-700 font-bold" style="color:${rInfo.color}">${rInfo.emoji} ${rInfo.name}</span>`;
+                } else {
+                    roleTag = `<span class="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-slate-400">役職不明</span>`;
+                }
+
+                const statusDot = p.isModerator
+                    ? 'bg-indigo-400'
+                    : (p.alive ? 'bg-emerald-400' : 'bg-rose-500');
+
+                const removeBotBtn = (state.isHost && state.phase === 'LOBBY' && p.isBot)
+                    ? `<button onclick="removeBotPlayer('${p.id}')" title="ボットを削除" class="text-slate-500 hover:text-rose-400 px-1.5"><i class="fa-solid fa-trash-can text-[11px]"></i></button>`
+                    : '';
+
+                const teleportBtn = (canSeeAllRoles && p.id !== state.myId)
+                    ? `<button onclick="teleportToPlayer('${p.id}')" title="このプレイヤーへ瞬間移動" class="text-sky-400 hover:text-sky-300 text-[11px] px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-500/30"><i class="fa-solid fa-location-crosshairs"></i></button>`
+                    : '';
+
+                return `
+                    <div class="flex items-center justify-between bg-slate-900/85 border border-slate-800 rounded-xl px-3 py-2">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="w-2 h-2 rounded-full ${statusDot} shrink-0"></span>
+                            <span class="text-xs font-bold text-white truncate">${escapeHtml(p.name)}</span>
+                            ${!p.alive && !p.isModerator ? '<span class="text-[10px] text-rose-400 font-bold">💀幽霊</span>' : ''}
+                        </div>
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            ${roleTag}
+                            ${teleportBtn}
+                            ${removeBotBtn}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            renderActionCard();
+        }
+
+        // Chat Processing
+        function sendChatMessage(e) {
+            e.preventDefault();
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text) return;
+            input.value = '';
+
+            const me = state.players[state.myId];
+            if (!me) return;
+
+            if (state.isHost) {
+                processIncomingChat(me, text);
+            } else if (hostConn && hostConn.open) {
+                hostConn.send({ type: 'CHAT_MSG', text });
+            }
+        }
+
+        function processIncomingChat(sender, text) {
+            const isGhostChannel = sender.isModerator || sender.isGhost || !sender.alive;
+            const isWolfNightChannel = !isGhostChannel && state.phase === 'NIGHT' && sender.role === 'TAKANERO';
+
+            const chatObj = {
+                senderId: sender.id,
+                senderName: sender.name,
+                isModerator: sender.isModerator,
+                channel: isGhostChannel ? 'GHOST' : (isWolfNightChannel ? 'WOLF' : 'PUBLIC'),
+                text
+            };
+
+            receiveFormattedChat(chatObj);
+            broadcastPacket({ type: 'CHAT_BROADCAST', chat: chatObj });
+        }
+
+        function receiveFormattedChat(chat) {
+            const me = state.players[state.myId];
+            const amIGhostOrMod = me && (me.isModerator || me.isGhost || !me.alive);
+            const amIWolf = me && me.role === 'TAKANERO';
+
+            // Filter private channels
+            if (chat.channel === 'GHOST' && !amIGhostOrMod && !chat.isModerator) return;
+            if (chat.channel === 'WOLF' && !amIWolf && !amIGhostOrMod) return;
+
+            const box = document.getElementById('chat-messages');
+            const div = document.createElement('div');
+
+            if (chat.isModerator) {
+                div.className = 'text-indigo-200 bg-indigo-950/60 border border-indigo-500/30 rounded-lg px-2 py-1';
+                div.innerHTML = `<span class="font-bold text-amber-300">[👻司会 ${escapeHtml(chat.senderName)}]</span> ${escapeHtml(chat.text)}`;
+            } else if (chat.channel === 'GHOST') {
+                div.className = 'text-slate-400 italic';
+                div.innerHTML = `<span class="font-bold text-slate-300">[👻幽霊 ${escapeHtml(chat.senderName)}]</span> ${escapeHtml(chat.text)}`;
+            } else if (chat.channel === 'WOLF') {
+                div.className = 'text-red-300 bg-red-950/50 rounded px-1.5 py-0.5';
+                div.innerHTML = `<span class="font-bold text-red-400">[🐾たかねこ通信 ${escapeHtml(chat.senderName)}]</span> ${escapeHtml(chat.text)}`;
+            } else {
+                div.className = 'text-slate-200';
+                div.innerHTML = `<span class="font-bold text-amber-200">${escapeHtml(chat.senderName)}:</span> ${escapeHtml(chat.text)}`;
+            }
+
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function appendSystemChat(msg) {
+            const box = document.getElementById('chat-messages');
+            const div = document.createElement('div');
+            div.className = 'text-[11px] text-amber-300/90 font-semibold py-0.5';
+            div.textContent = msg;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function triggerBannerAll(subtitle, title, desc, sound) {
+            showDramaticBanner(subtitle, title, desc);
+            if (sound) playSound(sound);
+            if (state.isHost) {
+                broadcastPacket({ type: 'BANNER_EVENT', subtitle, title, desc, sound });
+            }
+        }
+
+        let bannerTimeout = null;
+        function showDramaticBanner(subtitle, title, desc) {
+            const banner = document.getElementById('dramatic-banner');
+            const box = document.getElementById('dramatic-banner-box');
+            document.getElementById('dramatic-subtitle').textContent = subtitle;
+            document.getElementById('dramatic-title').textContent = title;
+            document.getElementById('dramatic-desc').textContent = desc;
+
+            banner.classList.remove('opacity-0');
+            banner.classList.add('opacity-100');
+            box.classList.remove('scale-95');
+            box.classList.add('scale-100');
+
+            clearTimeout(bannerTimeout);
+            bannerTimeout = setTimeout(() => {
+                banner.classList.remove('opacity-100');
+                banner.classList.add('opacity-0');
+                box.classList.remove('scale-100');
+                box.classList.add('scale-95');
+            }, 4200);
+        }
+
+        function showVictoryScreen(winnerTeam, title, desc) {
+            playSound('bell');
+            const modal = document.getElementById('victory-modal');
+            modal.classList.remove('hidden');
+
+            document.getElementById('victory-icon').textContent = winnerTeam === 'WEREWOLF' ? '🐾' : '🏮';
+            const badge = document.getElementById('victory-team-badge');
+            if (winnerTeam === 'WEREWOLF') {
+                badge.textContent = 'たかねこ（人狼）陣営の勝利';
+                badge.className = 'inline-block px-3 py-1 rounded-full text-xs font-extrabold bg-red-900/70 text-red-200 border border-red-400/40';
+            } else {
+                badge.textContent = '市民（人間）陣営の勝利';
+                badge.className = 'inline-block px-3 py-1 rounded-full text-xs font-extrabold bg-emerald-900/70 text-emerald-200 border border-emerald-400/40';
+            }
+            document.getElementById('victory-title').textContent = title;
+            document.getElementById('victory-desc').textContent = desc;
+
+            const listEl = document.getElementById('victory-roles-list');
+            listEl.innerHTML = Object.values(state.players).map(p => {
+                const rInfo = ROLES[p.role] || ROLES.CITIZEN;
+                return `<div class="flex items-center justify-between px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs">
+                    <span class="font-bold text-white">${escapeHtml(p.name)}</span>
+                    <span class="font-bold" style="color:${rInfo.color}">${rInfo.emoji} ${rInfo.name} ${p.isModerator ? '' : (p.alive ? '(生存)' : '(死亡)')}</span>
+                </div>`;
+            }).join('');
+
+            const resetBtn = document.getElementById('btn-victory-reset');
+            if (state.isHost) {
+                resetBtn.classList.remove('hidden');
+            } else {
+                resetBtn.classList.add('hidden');
+            }
+            renderPlayersList();
+        }
+
+        function showToast(msg, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const el = document.createElement('div');
+            const borderCol = type === 'warn' ? 'border-rose-500/60 text-rose-200' : (type === 'success' ? 'border-emerald-500/60 text-emerald-200' : 'border-amber-500/50 text-amber-100');
+            el.className = `glass-panel px-4 py-2.5 rounded-xl border ${borderCol} text-xs font-bold shadow-xl transition-all duration-300`;
+            el.textContent = msg;
+            container.appendChild(el);
+            setTimeout(() => {
+                el.style.opacity = '0';
+                setTimeout(() => el.remove(), 300);
+            }, 3200);
+        }
+
+        function escapeHtml(str) {
+            return String(str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function onWindowResize() {
+            if (!camera || !renderer) return;
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        /********************************************************************
+         * 11. MAIN ANIMATION & NETWORK TICK LOOP
+         ********************************************************************/
+        let poseSyncAccumulator = 0;
+        let secondAccumulator = 0;
+
+        function animateLoop() {
+            requestAnimationFrame(animateLoop);
+
+            const dt = Math.min(clock.getDelta(), 0.1);
+            const elapsed = clock.getElapsedTime();
+
+            // Flicker campfire flames & warm light
+            if (flameGroup && campfireLight) {
+                flameGroup.scale.y = 0.92 + Math.sin(elapsed * 11) * 0.12 + Math.cos(elapsed * 17) * 0.06;
+                flameGroup.rotation.y = elapsed * 1.5;
+                campfireLight.intensity = 2.4 + Math.sin(elapsed * 9) * 0.35;
+            }
+
+            // Float fireflies gently
+            if (firefliesMesh) {
+                const posAttr = firefliesMesh.geometry.attributes.position;
+                for (let i = 0; i < posAttr.count; i++) {
+                    let y = posAttr.getY(i) + Math.sin(elapsed * 1.8 + i) * 0.005;
+                    posAttr.setY(i, y);
+                }
+                posAttr.needsUpdate = true;
+            }
+
+            // Update local 3D character movement & camera
+            if (state.myId && state.players[state.myId]) {
+                updateLocalPlayerMovement(dt);
+                updateAiBotsIn3D(dt);
+                syncAvatarsInScene(dt);
+            }
+
+            // Network Pose Sync (12 times per second)
+            poseSyncAccumulator += dt;
+            if (poseSyncAccumulator >= 0.085) {
+                poseSyncAccumulator = 0;
+                if (state.isHost) {
+                    const poses = {};
+                    Object.values(state.players).forEach(p => {
+                        poses[p.id] = { x: p.x, y: p.y, z: p.z, rotY: p.rotY };
+                    });
+                    broadcastPacket({ type: 'POSE_SNAPSHOT', poses });
+                } else if (hostConn && hostConn.open) {
+                    hostConn.send({
+                        type: 'POSE_UPDATE',
+                        x: localPose.x,
+                        y: localPose.y,
+                        z: localPose.z,
+                        rotY: localPose.yaw
+                    });
+                }
+            }
+
+            // 1-second Game Phase Countdown Timer (Host authoritative)
+            secondAccumulator += dt;
+            if (secondAccumulator >= 1.0) {
+                secondAccumulator = 0;
+                if (state.isHost && state.timerSeconds > 0) {
+                    state.timerSeconds--;
+                    updateHudStatus();
+                    if (state.timerSeconds <= 0) {
+                        moderatorNextPhase();
+                    }
+                } else if (!state.isHost && state.timerSeconds > 0) {
+                    state.timerSeconds--;
+                    updateHudStatus();
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Start 3D Engine & URL Invite Check on Window Load
+        window.onload = function () {
+            initThreeWorld();
+            checkUrlForRoomInvite();
+            animateLoop();
+        };
+    </script>
+</body>
+</html>
